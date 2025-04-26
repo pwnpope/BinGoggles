@@ -17,6 +17,7 @@
 - Easy API with plenty of examples ✅
 - Both backwards and forwards taint analysis ✅
 - Great for embedded targets ✅
+- Both hugsy headless and binja headless support ✅
 
 ## Install
 #### A) Setup python virtual environment
@@ -59,11 +60,6 @@ analysis.tainted_forward_slice(
     var_type=SlicingID.FunctionVar,
     output=OutputMode.Printed,
 )
-
-```
-
-#### Using BinGoggles With Binja Headless
-```python
 
 ```
 
