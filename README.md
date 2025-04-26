@@ -15,6 +15,7 @@
     - User supplies what libraries if any the target program is using.
 - Architecture and language agnostic (kinda) ✅
     - As long as the target program loads into binja.
+- Works on all types of variables from normal variables to struct members, globals, and function parameters ✅
 - Easy API with plenty of examples ✅
 - Both backwards and forwards taint analysis ✅
 - Great for embedded targets ✅
