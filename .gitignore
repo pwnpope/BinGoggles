@@ -1,0 +1,16 @@
+.venv
+.bg
+*.egg-info
+__pycache__
+.pytest_cache
+test/binaries/bin
+bingoggles/structure.py
+build
+dist
+*.prof
+.vscode
+bg_cache
+changelog.md
+output.prof
+pytest.ini
+tasking.md
