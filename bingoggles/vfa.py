@@ -95,12 +95,11 @@ class Analysis:
         Returns:
             A tuple containing the sliced data, the function name, and the propagated variables
         """
-        if self.verbose:
-            print(
-                f"\n{Fore.LIGHTRED_EX}tainted_forward_slice{Fore.RESET}({Fore.MAGENTA}self, target: list[int, str], var_type: SlicingID, output: OutputMode = OutputMode.Returned{Fore.RESET})\n{f'{Fore.GREEN}={Fore.RESET}'*114}"
-            )
+        # if self.verbose:
+        #     print(
+        #         f"\n{Fore.LIGHTRED_EX}tainted_forward_slice{Fore.RESET}({Fore.MAGENTA}self, target: list[int, str], var_type: SlicingID, output: OutputMode = OutputMode.Returned{Fore.RESET})\n{f'{Fore.GREEN}={Fore.RESET}'*114}"
+        #     )
 
-        # if var_type == SlicingID.FunctionVar or var_type == SlicingID.FunctionParam:
         if hasattr(target.loc_address, "start"):
             func_obj = target.loc_address
 
@@ -242,8 +241,8 @@ class Analysis:
                                     pass
 
                 else:
-                    print(
-                        "Couldn't find variable reference, insure that you're using the MLIL to identify your target variable"
+                    raise ValueError(
+                        f"[{Fore.RED}ERORR{Fore.RESET}]Couldn't find variable reference, insure that you're using the MLIL to identify your target variable"
                     )
 
             # In cases for function params they dont need to be used anywhere where a variable is being assigned for the first time or whatever
@@ -266,7 +265,7 @@ class Analysis:
                     param_refs = func_obj.get_mlil_var_refs(target_param)
 
                 except AttributeError:
-                    return None
+                    raise AttributeError(f"[{Fore.RED}Error{Fore.RESET}] Couldn't find the parameter reference")
 
                 first_ref_addr = [
                     i.address
@@ -284,10 +283,9 @@ class Analysis:
                 )
 
             case _:
-                print(
+                raise TypeError(
                     f"{Fore.RED}var_type must be either SlicingID.FunctionParam or SlicingID.FunctionVar, please see the SlicingID class{Fore.RESET}"
                 )
-                return None
 
         match output:
             case OutputMode.Printed:
@@ -316,7 +314,7 @@ class Analysis:
                 )
 
             case _:
-                print(
+                raise TypeError(
                     f"[{Fore.RED}ERROR{Fore.RESET}]output_mode must be either OutputMode.Printed or OutputMode.Returned"
                 )
 
@@ -367,10 +365,9 @@ class Analysis:
                 )
 
             else:
-                print(
+                raise ValueError(
                     f"{Fore.RED}Couldn't find var_to_trace, you likely input the wrong address or variable name{Fore.RESET}"
                 )
-                return None
 
         elif var_type == SlicingID.FunctionParam:
             if isinstance(target.variable, str):
@@ -407,16 +404,15 @@ class Analysis:
             )
 
         else:
-            print(
+            raise ValueError(
                 f"[{Fore.RED}SlicingID invalid{Fore.RESET}], got {SlicingID}, expected valid {SlicingID}"
             )
-            return None
 
         match output:
             case OutputMode.Returned:
                 if self.verbose:
                     print(
-                        f"\nAddress | LOC | Target Variable | Propagated Variable\n{'-'*53}"
+                        f"Instruction Index | Address | LOC | Target Variable | Propagated Variable\n{'-'*53}"
                     )
                     for tainted_mlil in data:
                         print(tainted_mlil.loc.instr_index, tainted_mlil)
@@ -425,7 +421,7 @@ class Analysis:
 
             case OutputMode.Printed:
                 print(
-                    f"\nAddress | LOC | Target Variable | Propagated Variable\n{'-'*53}"
+                    f"\nInstruction Index | Address | LOC | Target Variable | Propagated Variable\n{'-'*53}"
                 )
                 for tainted_mlil in data:
                     print(tainted_mlil.loc.instr_index, tainted_mlil)
@@ -443,7 +439,7 @@ class Analysis:
         var_type: SlicingID,
         slice_type: SliceType,
         output: OutputMode = OutputMode.Returned,
-    ) -> dict | None:
+    ) -> dict:
         """
         `complete_slice` Take an original Slice of the target function and then also slice the function calls.
 
@@ -468,9 +464,8 @@ class Analysis:
                     var_type=var_type,
                 )
 
-            raise TypeError(
-                f"[{Fore.RED}ERROR{Fore.RESET}] Address is likely wrong in target | got: {target.loc_address:#0x} for {target.variable}"
-            )
+            except TypeError:
+                raise TypeError(f"[{Fore.RED}ERROR{Fore.RESET}] Address is likely wrong in target | got: {target.loc_address:#0x} for {target.variable}")
 
         elif slice_type == SliceType.Backward:
             try:
@@ -482,10 +477,9 @@ class Analysis:
                 )
 
             except TypeError:
-                print(
+                raise TypeError(
                     f"[{Fore.RED}ERROR{Fore.RESET}] Address is likely wrong in target | got: {target.loc_address:#0x} for {target.variable}"
                 )
-                return None
 
         else:
             raise TypeError(
