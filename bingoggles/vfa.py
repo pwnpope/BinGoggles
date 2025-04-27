@@ -636,6 +636,9 @@ class Analysis:
         tainted_params: Variable | str | list[Variable],
         origin_function: Function = None,
         original_tainted_params: Variable | str | list[Variable] = None,
+        tainted_param_map: dict = None,
+        recursion_limit = 8,
+        sub_functions_analyzed = 0,
     ):
         """
         Determine if a function's parameter is tainted by tracking the tainted parameter's path and analyzing
@@ -648,11 +651,14 @@ class Analysis:
                                                             Variable object, a string representing the parameter name,
                                                             or a list of Variable objects.
             origin_function (Function): This parameter is used for internal tracking and paremeter matching (do not touch this parameter).
+            tainted_param_map (dict): A dictionary mapping original parameters to their tainted parameters.
 
         Returns:
             set: A set of parameter names (as strings) that are determined to be tainted within the function (including your inputted list of parameters).
             bool: Whether or not the return variable is tainted
         """
+        if tainted_param_map is None:
+            tainted_param_map = {}
 
         def walk_variable(var_mapping: dict, key_names: set):
             """
@@ -685,8 +691,8 @@ class Analysis:
             addr = function_node
             function_node = addr_to_func(self, function_node)
             if function_node is None:
-                raise Exception(
-                    f"Could not find target function from address @ {addr:#0x}"
+                raise ValueError(
+                    f"[{Fore.RED}ERROR{Fore.RESET}]Could not find target function from address @ {addr:#0x}"
                 )
 
         if origin_function is None:
@@ -732,6 +738,7 @@ class Analysis:
                             function_node.start,
                         )
                     )
+
                 except ValueError:
                     continue
 
@@ -834,40 +841,45 @@ class Analysis:
                             )
                         ]
 
-                        interproc_results = self.is_function_param_tainted(
-                            call_object,
-                            tainted_sub_params,
-                            origin_function,
-                            original_tainted_params,
-                        )
-
-                        # Map back the tainted sub-function parameters to the current function's variables
-                        tainted_sub_variables = [
-                            param[0].ssa_form.var
-                            for param in zipped_params
-                            if param[1].name in interproc_results.tainted_param_names
-                        ]
-
-                        for sub_var in tainted_sub_variables:
-                            tainted_variables.add(
-                                TaintedVar(
-                                    sub_var,
-                                    TaintConfidence.Tainted,
-                                    loc.address,
-                                )
+                        if recursion_limit < sub_functions_analyzed:
+                            interproc_results = self.is_function_param_tainted(
+                                call_object,
+                                tainted_sub_params,
+                                origin_function,
+                                original_tainted_params,
+                                tainted_param_map,
                             )
 
-                        for ret_var in loc.vars_written:
-                            if interproc_results.is_return_tainted:
+                            sub_functions_analyzed += 1
+
+                            # Map back the tainted sub-function parameters to the current function's variables
+                            tainted_sub_variables = [
+                                param[0].ssa_form.var
+                                for param in zipped_params
+                                if param[1].name in interproc_results.tainted_param_names
+                            ]
+
+                            for sub_var in tainted_sub_variables:
                                 tainted_variables.add(
                                     TaintedVar(
-                                        ret_var,
+                                        sub_var,
                                         TaintConfidence.Tainted,
                                         loc.address,
                                     )
                                 )
 
-                        continue
+                            for ret_var in loc.vars_written:
+                                if interproc_results.is_return_tainted:
+                                    tainted_variables.add(
+                                        TaintedVar(
+                                            ret_var,
+                                            TaintConfidence.Tainted,
+                                            loc.address,
+                                        )
+                                    )
+
+                    case _:
+                        print("we hit an unaccounted for case", loc.operation.name, hex(loc.address), loc)
 
                 # Map variables written to the variables read in the current instruction
                 for var_assignment in loc.vars_written:
@@ -897,6 +909,9 @@ class Analysis:
             if var.name in [param.name for param in origin_function.parameter_vars]
         )
 
+        if len(tainted_parameters) > 1:
+            tainted_param_map[list(tainted_parameters)[0]] = list(set(tainted_parameters))[1:]
+        
         # Find out if return variable is tainted
         ret_variable_tainted = False
 
@@ -914,16 +929,17 @@ class Analysis:
                         ret_variable_tainted = True
 
         # DEBUG
+        # from pprint import pprint
         # pprint(variable_mapping)
         # pprint(tainted_variables)
 
-        #:TODO map the params to which param tainted it.
         return InterprocTaintResult(
             tainted_param_names=tainted_parameters,
-            # tainted_param_map={},
             original_tainted_variables=original_tainted_params,
             is_return_tainted=ret_variable_tainted,
+            tainted_param_map=tainted_param_map,
         )
+
 
     def is_function_imported(self, instr_mlil: MediumLevelILInstruction) -> bool:
         if instr_mlil.operation != MediumLevelILOperation.MLIL_CALL:

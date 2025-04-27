@@ -163,7 +163,7 @@ void level_six() {
 #include <stdio.h>
 #include <stdlib.h>
 
-void level_six() {
+void level_seven() {
     char *buffer;
 
     // Step 1: Allocate memory

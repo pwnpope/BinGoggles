@@ -1,4 +1,4 @@
-# BinGoggles TODO
+# BinGoggles v1.0.0 TODO
 
 ## 📚 Documentation & Packaging
 - [X] Finalize the README
@@ -18,8 +18,9 @@
 - [ ] Improve `is_function_param_tainted()`  
     - [x] Fix false positive from `result_name`
     - [x] Fix false positive with `x->d`
-    - [ ] Map returned parameters to their respective tainted params
-    - [ ] Add recursion limit to prevent path explosion
+    - [X] Map returned parameters to their respective tainted params
+    - [X] Add recursion limit to prevent path explosion
+    - [ ] Improve the function to account for more SSA MLIL operations  <- Currently working on this so that it can successfully complete the test case for `python3 -m pytest -s --rpyc test/test_auxiliary.py::test_is_param_tainted`
 
 ## 💡 Analysis Features
 - [ ] Implement better memoization system (for general analysis)

@@ -170,7 +170,7 @@ def test_complete_fwd_slice_param(
 
 
 def test_is_param_tainted(
-    bg_init, test_bin="./test/binaries/bin/test_is_param_tainted"
+    bg_init, test_bin="./test/binaries/bin/test_interproc_param_tainting"
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -181,9 +181,8 @@ def test_is_param_tainted(
     bv, libraries_mapped = bg.init()
 
     aux = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
-    # 0x004013B7: void* do_calculation_and_write_to_buf(int a, int x, int c, int d, void* result_name)
-    # 00401354    void* my_strcpy(char* d, char* s)
-    data = aux.is_function_param_tainted(function_node=0x00401354, tainted_params=["s"])
+    data = aux.is_function_param_tainted(function_node=0x0040133c, tainted_params=["final_array"]) 
+                                         #tainted_params=["final_array", "temp_array", "size", "start_val", "shift", "adjust_val"])
 
     print(data)
     assert True
