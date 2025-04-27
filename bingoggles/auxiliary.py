@@ -5,13 +5,11 @@ from binaryninja.mediumlevelil import (
     MediumLevelILLoad,
     MediumLevelILConstPtr,
     MediumLevelILVar,
-    MediumLevelILSetVarField,
 )
 from binaryninja.highlevelil import HighLevelILOperation, HighLevelILInstruction
 from colorama import Fore
 from .bingoggles_types import *
 from binaryninja.enums import MediumLevelILOperation, SymbolType
-from pprint import pprint
 
 
 def flat(ops):
@@ -39,13 +37,6 @@ def get_symbol_from_const_ptr(analysis, const_ptr: MediumLevelILConstPtr):
         if int(s.type) == int(SymbolType.DataSymbol)
     ]:
         if symbol.address == const_ptr.value:
-            print(
-                int(symbol.type),
-                data_symbol_type_val,
-                " | ",
-                symbol.address,
-                const_ptr.address,
-            )
             return symbol
     return None
 
@@ -152,10 +143,9 @@ def func_name_to_object(analysis, func_name: str) -> int | None:
         if func.name == func_name:
             return func
     else:
-        print(
+        raise ValueError(
             f"[{Fore.RED}Error] could not find function object for the function name {func_name}"
         )
-        return None
 
 
 def is_address_of_field_offset_match(
@@ -355,12 +345,11 @@ def trace_tainted_variable(
         vars_found: list = [variable]
 
     else:
-        print(
+        raise ValueError(
             f"[{Fore.RED}ERROR{Fore.RESET}] Could not find variable with that name.",
             variable,
             type(variable),
         )
-        return None
 
     def get_var_name(v):
         if isinstance(v, TaintedGlobal):
@@ -602,11 +591,6 @@ def trace_tainted_variable(
                                             glob_symbol = get_symbol_from_const_ptr(
                                                 analysis, param
                                             )
-                                            # 3 -> DataSymbol
-                                            if glob_symbol.type != 3:
-                                                print(
-                                                    f"Found an instance of a non DataSymbol global, please investigate... [debug info]:\n  {glob_symbol}\n{instr_mlil}"
-                                                )
 
                                             tainted_call_params.append(
                                                 TaintedGlobal(
@@ -792,12 +776,6 @@ def trace_tainted_variable(
                             except AttributeError:
                                 glob_symbol = get_symbol_from_const_ptr(analysis, param)
 
-                                # 3 -> DataSymbol
-                                if glob_symbol.type != 3:
-                                    print(
-                                        f"Found an instance of a non DataSymbol global, please investigate... [debug info]:\n  {glob_symbol}\n{instr_mlil}"
-                                    )
-
                                 tainted_call_params.append(
                                     TaintedGlobal(
                                         glob_symbol.name,
@@ -843,7 +821,7 @@ def trace_tainted_variable(
         return sorted_locs, already_iterated
 
 
-def find_param_by_name(func_obj: Function, param_name: str) -> Variable | None:
+def find_param_by_name(func_obj: Function, param_name: str) -> Variable:
     """
     `find_param_by_name` find a function parameter by name
 
@@ -863,30 +841,9 @@ def find_param_by_name(func_obj: Function, param_name: str) -> Variable | None:
         return var_object
 
     else:
-        print(
+        raise ValueError(
             f"[{Fore.RED}Param '{param_name}' not found{Fore.RESET}] Please try passing a valid parameter name for the given function"
         )
-        return None
-
-
-def get_function_xrefs(analysis, function_addr: int) -> list | None:
-    """
-    `get_function_xrefs` gather a list of xrefs for a target function address
-
-    Args:
-        function_addr (int): Function address to get xrefs from
-
-    Returns:
-        Returns a list of xrefs for the given target function address
-    """
-    function = analysis.bv.get_function_at(function_addr)
-    if function is None:
-        print(
-            f"[{Fore.RED}Zero xrefs found{Fore.RESET}] {function.name} returned zero xrefs"
-        )
-        return None
-
-    return [i for i in analysis.bv.get_code_refs(function.start)]
 
 
 def str_param_to_var_object(

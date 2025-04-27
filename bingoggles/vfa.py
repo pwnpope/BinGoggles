@@ -41,7 +41,7 @@ class Analysis:
             the call name, the address of the function call, the LOC, and the parameter map
         """
         if self.verbose:
-            print(
+            raise TypeError(
                 f"\n{Fore.LIGHTRED_EX}get_sliced_calls{Fore.RESET}({Fore.MAGENTA}self, data: list, func_name: str, verbose: list{Fore.RESET})\n{f'{Fore.GREEN}={Fore.RESET}' * 65}"
             )
 
@@ -462,17 +462,15 @@ class Analysis:
 
         # Get the parent function "complete" slice and sliced calls
         if slice_type == SliceType.Forward:
-            # try:
-            slice_data, og_func_name, propagated_vars = self.tainted_forward_slice(
-                target=target,
-                var_type=var_type,
-            )
+            try:
+                slice_data, og_func_name, propagated_vars = self.tainted_forward_slice(
+                    target=target,
+                    var_type=var_type,
+                )
 
-            # except TypeError:
-            #     print(
-            #         f"[{Fore.RED}ERROR{Fore.RESET}] Address is likely wrong in target | got: {target.loc_address:#0x} for {target.variable}"
-            #     )
-            #     return None
+            raise TypeError(
+                f"[{Fore.RED}ERROR{Fore.RESET}] Address is likely wrong in target | got: {target.loc_address:#0x} for {target.variable}"
+            )
 
         elif slice_type == SliceType.Backward:
             try:
@@ -490,10 +488,9 @@ class Analysis:
                 return None
 
         else:
-            print(
+            raise TypeError(
                 f"[{Fore.RED}ERROR{Fore.RESET}] forward_or_backward param must be a valid SliceType ( must be either backward or forward )"
             )
-            return None
 
         sliced_calls = self.get_sliced_calls(slice_data, og_func_name, propagated_vars)
 
@@ -613,7 +610,7 @@ class Analysis:
                         function_name, tainted_var = key
                         if isinstance(tainted_var, str):
                             print(
-                                f"\nFunction name: {function_name} | Target Variable: {tainted_var} | Address | LOC | Target Variable | Propagated Variable\n{(Fore.LIGHTGREEN_EX+'='+Fore.RESET)*(91 + len(function_name) + len(tainted_var))}"
+                                f"Function name: {function_name} | Target Variable: {tainted_var} | Address | LOC | Target Variable | Propagated Variable\n{(Fore.LIGHTGREEN_EX+'='+Fore.RESET)*(91 + len(function_name) + len(tainted_var))}"
                             )
                         elif isinstance(tainted_var, Variable):
                             print(
@@ -721,7 +718,7 @@ class Analysis:
 
         if self.verbose and not self.is_function_param_tainted_printed:
             print(
-                f"\n{Fore.LIGHTRED_EX}is_function_param_tainted{Fore.RESET}({Fore.MAGENTA}self, function_node: int | Function, "
+                # f"\n{Fore.LIGHTRED_EX}is_function_param_tainted{Fore.RESET}({Fore.MAGENTA}self, function_node: int | Function, "
                 f"tainted_params: Variable | str | list[Variable]{Fore.RESET})\n-> {Fore.LIGHTBLUE_EX}{function_node}"
                 f"{Fore.RESET}:{Fore.BLUE}{tainted_params}{Fore.RESET}\n{Fore.GREEN}{'='*113}{Fore.RESET}"
             )
