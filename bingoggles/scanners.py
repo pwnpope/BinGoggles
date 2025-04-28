@@ -3,10 +3,6 @@ from binaryninja.enums import MediumLevelILOperation
 from binaryninja.mediumlevelil import MediumLevelILVar
 
 
-def find_formatted_parameters():
-    pass
-
-
 class VulnerabilityScanners:
     def __init__(self, bv, lines_of_code_gathered, tainted_variables) -> None:
         self.bv = bv
