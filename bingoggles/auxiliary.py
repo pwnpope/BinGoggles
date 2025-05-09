@@ -28,20 +28,18 @@ def flat(ops):
     return flat_list
 
 
-def get_symbol_from_const_ptr(analysis, const_ptr: MediumLevelILConstPtr):
-    data_symbol_type_val = int(SymbolType.DataSymbol)
+def get_symbol_from_const_ptr(bv, const_ptr: MediumLevelILConstPtr):
+    # data_symbol_type_val = int(SymbolType.DataSymbol)
 
     for symbol in [
-        s
-        for s in analysis.bv.get_symbols()
-        if int(s.type) == int(SymbolType.DataSymbol)
+        s for s in bv.get_symbols() if int(s.type) == int(SymbolType.DataSymbol)
     ]:
         if symbol.address == const_ptr.value:
             return symbol
     return None
 
 
-def get_struct_field_refs(analysis, tainted_struct_member: TaintedStructMember):
+def get_struct_field_refs(bv, tainted_struct_member: TaintedStructMember):
     def traverse_operand(op):
         if not isinstance(op, HighLevelILInstruction):
             return False
@@ -59,9 +57,10 @@ def get_struct_field_refs(analysis, tainted_struct_member: TaintedStructMember):
         return False
 
     hlil_use_sites = set()
-    func_object = analysis.bv.get_functions_containing(
-        tainted_struct_member.loc_address
-    )[0]
+    # func_object = analysis.get_functions_containing(
+    #     tainted_struct_member.loc_address
+    # )[0]
+    func_object = bv.get_functions_containing(tainted_struct_member.loc_address)[0]
     var_refs_hlil = func_object.get_hlil_var_refs(tainted_struct_member.hlil_var)
     var_refs_mlil = func_object.get_mlil_var_refs(tainted_struct_member.variable)
 
@@ -111,7 +110,7 @@ def param_var_map(params, propagated_vars: list[TaintedVar]) -> dict:
     return param_info
 
 
-def addr_to_func(analysis, address: int) -> Function | None:
+def addr_to_func(bv, address: int) -> Function | None:
     """
     `addr_to_func` Get the function object from an address
 
@@ -121,7 +120,7 @@ def addr_to_func(analysis, address: int) -> Function | None:
     Returns:
         Binary ninja function object
     """
-    function_object = analysis.bv.get_functions_containing(address)
+    function_object = bv.get_functions_containing(address)
     if function_object:
         return function_object[0]
 
@@ -269,7 +268,7 @@ def trace_tainted_variable(
         for instr_mlil in function_object.mlil.instructions:
             for op in flat(instr_mlil.operands):
                 if isinstance(op, MediumLevelILConstPtr):
-                    symbol = get_symbol_from_const_ptr(analysis, op)
+                    symbol = get_symbol_from_const_ptr(analysis.bv, op)
                     if symbol and symbol.name == var_to_trace.variable:
                         variable_use_sites.append(instr_mlil)
 
@@ -283,48 +282,57 @@ def trace_tainted_variable(
         ),
     ) -> Variable | None:
         """
-        `get_connected_var` Get the last vars_read from an assignment connected to the target variable
-
-        Args:
-            function_object (Function): binary ninja function object of the target function
-            target_variable (TaintedVar): target variable to perform the analysis on
-
-        Returns:
-            Returns either the connected variable (last variable to get assigned to the target variable) OR None if none found.
+        Tries to find the source variable (vars_read) that most recently assigned to the given target variable.
         """
-        if isinstance(target_variable, TaintedVar) or isinstance(
-            target_variable, TaintedAddressOfField
-        ):
-            reversed_var_refs = function_object.get_mlil_var_refs(
-                target_variable.variable
-            )
-            connected_variable = None
+        connected_candidates = []
 
-            for var_ref in reversed_var_refs:
-                mlil_instr = function_object.get_llil_at(var_ref.address).mlil
+        if isinstance(target_variable, (TaintedVar, TaintedAddressOfField)):
+            refs = function_object.get_mlil_var_refs(target_variable.variable)
+
+            for ref in refs:
+                mlil = function_object.get_llil_at(ref.address).mlil
+                if not mlil:
+                    continue
+
                 if (
-                    mlil_instr.vars_written
-                    and mlil_instr.vars_written[0] == target_variable.variable
-                    and mlil_instr.vars_read
+                    mlil.vars_written
+                    and mlil.vars_written[0] == target_variable.variable
+                    and mlil.vars_read
                 ):
-                    connected_variable = mlil_instr.vars_read[0]
-
-            return connected_variable
+                    connected_candidates.append((mlil.address, mlil.vars_read[0]))
 
         elif isinstance(target_variable, TaintedGlobal):
-            reversed_var_refs = get_mlil_glob_refs(function_object, target_variable)
-            connected_variable = None
+            refs = get_mlil_glob_refs(function_object, target_variable)
 
-            for var_ref in reversed_var_refs:
-                mlil_instr = function_object.get_llil_at(var_ref.address).mlil
+            for ref in refs:
+                mlil = function_object.get_llil_at(ref.address).mlil
+                if not mlil:
+                    continue
+
                 if (
-                    mlil_instr.vars_written
-                    and mlil_instr.vars_written[0] == target_variable.variable
-                    and mlil_instr.vars_read
+                    mlil.vars_written
+                    and mlil.vars_written[0] == target_variable.variable
+                    and mlil.vars_read
                 ):
-                    connected_variable = mlil_instr.vars_read[0]
+                    connected_candidates.append((mlil.address, mlil.vars_read[0]))
 
-            return connected_variable
+        elif isinstance(target_variable, TaintedStructMember):
+            # Struct members may propagate from field access or assignment
+            refs = get_struct_field_refs(function_object.view, target_variable)
+
+            for ref in refs:
+                mlil = function_object.get_llil_at(ref.address).mlil
+                if not mlil:
+                    continue
+
+                if hasattr(mlil, "vars_read") and mlil.vars_read:
+                    connected_candidates.append((mlil.address, mlil.vars_read[0]))
+
+        if connected_candidates:
+            # Return the one closest to the target variable (highest address before its use)
+            return sorted(connected_candidates, key=lambda t: t[0], reverse=True)[0][1]
+
+        return None
 
     # initialize the vars_found list if variable type is TaintedVar or binja Variable
     if isinstance(variable, TaintedVar) or isinstance(variable, Variable):
@@ -375,7 +383,7 @@ def trace_tainted_variable(
             variable_use_sites = get_mlil_glob_refs(function_object, var_to_trace)
 
         elif isinstance(var_to_trace, TaintedStructMember):
-            variable_use_sites = get_struct_field_refs(analysis, var_to_trace)
+            variable_use_sites = get_struct_field_refs(analysis.bv, var_to_trace)
 
         else:
             variable_use_sites = function_object.get_mlil_var_refs(
@@ -540,11 +548,11 @@ def trace_tainted_variable(
 
                         params_mapped, tainted_func_param = (
                             get_func_param_from_call_param(
-                                analysis, instr_mlil, var_to_trace
+                                analysis.bv, instr_mlil, var_to_trace
                             )
                         )
                         call_func_object = addr_to_func(
-                            analysis, int(str(instr_mlil.dest), 16)
+                            analysis.bv, int(str(instr_mlil.dest), 16)
                         )
 
                         if call_func_object:
@@ -589,7 +597,7 @@ def trace_tainted_variable(
 
                                         except AttributeError:
                                             glob_symbol = get_symbol_from_const_ptr(
-                                                analysis, param
+                                                analysis.bv, param
                                             )
 
                                             tainted_call_params.append(
@@ -624,11 +632,15 @@ def trace_tainted_variable(
                     ):
                         if isinstance(instr_mlil.src, MediumLevelILLoad):
                             try:
-                                address_variable, offset_variable = (
-                                    instr_mlil.src.vars_read
-                                )
-                            except:
-                                print("[LOC (unhandled)]: ", instr_mlil)
+                                address_variable, offset_variable = instr_mlil.src.vars_read
+
+                            except ValueError:
+                                address_variable = instr_mlil.src.vars_read[0]
+                                offset_variable = None
+
+                            except Exception as e:
+                                print("[LOC (unhandled)]: ", instr_mlil, hex(instr_mlil.address))
+                                print("[Error]: ", e)
                                 continue
 
                         else:
@@ -735,9 +747,8 @@ def trace_tainted_variable(
 
                     collected_locs.append(tainted_loc)
 
-                # :TODO implement this
                 case int(MediumLevelILOperation.MLIL_SET_VAR_FIELD):
-                    print("hit set_var_field operation")
+                    dest_var = instr_mlil.dest
 
                     tainted_loc = TaintedLOC(
                         instr_mlil,
@@ -752,14 +763,15 @@ def trace_tainted_variable(
                     )
 
                     collected_locs.append(tainted_loc)
-
-                #:TODO VFG gen
-                case int(MediumLevelILOperation.MLIL_IF):
-                    pass
+                    vars_found.append(
+                        TaintedVar(
+                            dest_var, TaintConfidence.Tainted, instr_mlil.address
+                        )
+                    )
 
                 case _:
                     print(
-                        f"[INFO] we hit an un-accounted for case, here are some details\n[MLIL Operation] {instr_mlil.operation.name}\n[LOC]: {instr_mlil}\n\n"
+                        f"[INFO] we hit an un-accounted for case, here are some details\n[MLIL Operation] {instr_mlil.operation.name}\n[LOC]: {instr_mlil}\n [Address] {instr_mlil.address:#0x}\n\n"
                     )
                     # Collect vars written
                     if instr_mlil.vars_written:
@@ -774,7 +786,9 @@ def trace_tainted_variable(
                                 )
 
                             except AttributeError:
-                                glob_symbol = get_symbol_from_const_ptr(analysis, param)
+                                glob_symbol = get_symbol_from_const_ptr(
+                                    analysis.bv, param
+                                )
 
                                 tainted_call_params.append(
                                     TaintedGlobal(
@@ -904,12 +918,12 @@ def str_to_var_object(
     return var_object
 
 
-def get_func_param_from_call_param(analysis, instr_mlil, var_to_trace):
+def get_func_param_from_call_param(bv, instr_mlil, var_to_trace):
     """
     Maps the parameters of a called function to the arguments provided at the call site and identifies which function parameter corresponds to a given variable.
 
     Args:
-        analysis: The analysis context or object containing analysis utilities.
+        bv: BinaryView object representing the binary being analyzed.
         instr_mlil: The Medium Level Intermediate Language (MLIL) instruction representing the function call.
         var_to_trace: The variable (as a TaintedVar object) from the calling function that we want to trace into the called function.
 
@@ -933,7 +947,7 @@ def get_func_param_from_call_param(analysis, instr_mlil, var_to_trace):
         - It then maps each argument at the call site to the corresponding parameter of the called function.
         - Finally, it checks if any of the call arguments match the `var_to_trace` and returns the corresponding function parameter.
     """
-    function_object = addr_to_func(analysis, int(str(instr_mlil.dest), 16))
+    function_object = addr_to_func(bv, int(str(instr_mlil.dest), 16))
     if function_object:
         call_params = instr_mlil.params
         function_params = [i for i in function_object.parameter_vars]
