@@ -1,4 +1,4 @@
-# BinGoggles v1.0.1 TODO
+# BinGoggles v.0.2 TODO
 
 ## 📚 Documentation & Packaging
 - [x] Finalize the README
