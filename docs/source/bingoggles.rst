@@ -1,5 +1,45 @@
-bingoggles package
-==================
+BinGoggles
+===========
+
+``BinGoggles`` is a binary-analysis and vulnerability-research framework designed for rapid development of data-flow analyses tooling. Written in Python, it provides a modular architecture to plug in custom scanners, graph builders, and vulnerability detectors.
+
+The primary location for this documentation is at https://docs.bingoggles.com (powered by Read the Docs).  
+It is maintained in three primary channels:
+
+- Stable_  
+- Beta_  
+- Dev_  
+
+.. _Stable: https://docs.bingoggles.com/en/stable  
+.. _Beta:   https://docs.bingoggles.com/en/beta  
+.. _Dev:    https://docs.bingoggles.com/en/dev  
+
+Getting Started
+---------------
+
+.. toctree::
+   :maxdepth: 2
+   :glob:
+
+   about
+   install
+   intro
+   quickstart
+
+Module Reference
+----------------
+
+Each of the core ``bingoggles`` modules is documented below.
+
+.. toctree::
+   :maxdepth: 1
+   :glob:
+
+   bingoggles.auxiliary
+   bingoggles.bingoggles_types
+   bingoggles.modules
+   bingoggles.vfa
+   bingoggles.graph_builder
 
 Submodules
 ----------
@@ -12,7 +52,7 @@ bingoggles.auxiliary module
    :undoc-members:
    :show-inheritance:
 
-bingoggles.bingoggles\_types module
+bingoggles.bingoggles_types module
 -----------------------------------
 
 .. automodule:: bingoggles.bingoggles_types
@@ -36,10 +76,20 @@ bingoggles.vfa module
    :undoc-members:
    :show-inheritance:
 
-Module contents
----------------
+bingoggles.graph_builder module
+--------------------------------
 
-.. automodule:: bingoggles
+.. automodule:: bingoggles.graph_builder
    :members:
    :undoc-members:
    :show-inheritance:
+
+Indices and Tables
+------------------
+
+.. toctree::
+   :hidden:
+
+   genindex
+   modindex
+   search
