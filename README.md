@@ -1,12 +1,11 @@
-## `Bingoggles` The Assumed Taint Analysis Engine
+# `Bingoggles` The Assumed Taint Analysis Engine
+
+![](images/bingoggles.jpeg)
 
 - Variables are the key to storing data in programs, that's why when we do perform any kind of analysis as a vulnerability researcher we usually track what variables contain user input and start from there, my library will help with preforming analysis on these variables by providing through propagation analysis.
 
 - In the development of my library I coined the term "complete slice" which means we're tainting the variable and tracking its usage throughout the entire program. What does this mean? This means that if data from a complete slice ends up in a sub-function call within the parent function we'll do analysis on that variable path as well.
     - In short we're gathering the full path of a variable.
-
-
-![](images/bingoggles.png)
 
 ## How is BinGoggles unique?
 - Platform agnostic, working on linux, mac, and windows ✅ 
