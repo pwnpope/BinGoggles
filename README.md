@@ -60,15 +60,29 @@ analysis = Analysis(
 analysis.tainted_slice(
     target=TaintTarget(0x00401212, "rdi"),
     var_type=SlicingID.FunctionVar,
-    output=OutputMode.Printed,
 )
-
 ```
 
-#### Running test cases
+#### Example usage (running a test case)
 ```bash
 python3 -m pytest -s --rpyc test/test_auxiliary.py::test_global_tracking_fwd_var
 ```
 
+## Generating Documentation
+```bash
+cd docs
+make html
+cd ..
+xdg-open docs/build/html/index.html
+```
+
 ## Contributions
-- feel free to open an issue if encounter a bug
+- **Report issues**: If you encounter a bug or have a feature request, please open an issue so we can track and address it.
+
+- **Submit pull requests**: Want to improve the code or documentation? Fork the repo, make your changes, and submit a pull request—PRs are reviewed on a regular basis.
+
+- **Join the discussion**: Have questions or ideas? Drop a comment in issues or join our community channels to share your thoughts.
+
+- **Spread the word** — tweet about your favorite feature, share in Slack/Discord channels, or write a blog post.
+
+Thank you for helping make BinGoggles better!
