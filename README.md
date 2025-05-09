@@ -1,12 +1,12 @@
-## Introducing `Bingoggles` the assumed taint analysis engine
+## `Bingoggles` The Assumed Taint Analysis Engine
 
-- Variables are the key to storing data in programs, that's why when we do perform any kind of analysis as a vulnerability researcher we usually track what variables contain user input and start from there, my library will help with preforming analysis on these variables providing through propagation analysis.
+- Variables are the key to storing data in programs, that's why when we do perform any kind of analysis as a vulnerability researcher we usually track what variables contain user input and start from there, my library will help with preforming analysis on these variables by providing through propagation analysis.
 
 - In the development of my library I coined the term "complete slice" which means we're tainting the variable and tracking its usage throughout the entire program. What does this mean? This means that if data from a complete slice ends up in a sub-function call within the parent function we'll do analysis on that variable path as well.
     - In short we're gathering the full path of a variable.
 
 
-![](images/bingoggles.png)
+![](images/bingoggles.jpeg)
 
 ## How is BinGoggles unique?
 - Platform agnostic, working on linux, mac, and windows ✅ 
@@ -15,7 +15,7 @@
     - User supplies what libraries if any the target program is using.
 - Architecture and language agnostic (kinda) ✅
     - As long as the target program loads into binja.
-- Works on all types of variables from normal variables to struct members, globals, and function parameters ✅
+- Works on all types of variables from `normal variables` to `struct members`, `globals`, and `function parameters` ✅
 - Easy API with plenty of examples ✅
 - Both backwards and forwards taint analysis ✅
 - Great for embedded targets ✅
@@ -57,7 +57,7 @@ analysis = Analysis(
     binaryview=bv, binaryninja=bn, verbose=True, libraries_mapped=libraries_mapped
 )
 
-analysis.tainted_forward_slice(
+analysis.tainted_slice(
     target=TaintTarget(0x00401212, "rdi"),
     var_type=SlicingID.FunctionVar,
     output=OutputMode.Printed,
@@ -69,3 +69,6 @@ analysis.tainted_forward_slice(
 ```bash
 python3 -m pytest -s --rpyc test/test_auxiliary.py::test_global_tracking_fwd_var
 ```
+
+## Contributions
+- feel free to open an issue if encounter a bug
