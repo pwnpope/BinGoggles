@@ -8,9 +8,11 @@ from binaryninja.mediumlevelil import (
 )
 from binaryninja.highlevelil import HighLevelILOperation, HighLevelILInstruction
 from colorama import Fore
+from typing import Sequence, Dict, Tuple, Optional
 from .bingoggles_types import *
 from binaryninja.enums import MediumLevelILOperation, SymbolType
-
+from binaryninja import BinaryView, Symbol
+from .vfa import Analysis
 
 def flat(ops):
     flat_list = []
@@ -19,7 +21,6 @@ def flat(ops):
             flat_list.extend(flat(op))
         elif isinstance(op, HighLevelILInstruction):
             flat_list.append(op)
-            # only flatten first-level children, don't recurse beyond
             for child in op.operands:
                 if isinstance(child, HighLevelILInstruction):
                     flat_list.append(child)
@@ -28,9 +29,19 @@ def flat(ops):
     return flat_list
 
 
-def get_symbol_from_const_ptr(bv, const_ptr: MediumLevelILConstPtr):
-    # data_symbol_type_val = int(SymbolType.DataSymbol)
+def get_symbol_from_const_ptr(
+    bv: BinaryView, const_ptr: MediumLevelILConstPtr
+) -> Optional[Symbol]:
+    """
+    Resolve a const-pointer operand back to its data symbol.
 
+    Args:
+        bv:        The BinaryView containing your symbols.
+        const_ptr: An MLIL ConstPtr whose .value is the address of some data.
+
+    Returns:
+        The matching Symbol of type DataSymbol, or None if not found.
+    """
     for symbol in [
         s for s in bv.get_symbols() if int(s.type) == int(SymbolType.DataSymbol)
     ]:
@@ -39,7 +50,34 @@ def get_symbol_from_const_ptr(bv, const_ptr: MediumLevelILConstPtr):
     return None
 
 
-def get_struct_field_refs(bv, tainted_struct_member: TaintedStructMember):
+def get_struct_field_refs(
+    bv: BinaryView,
+    tainted_struct_member: TaintedStructMember
+) -> List[MediumLevelILInstruction]:
+    """
+    Find all MLIL instructions that reference a specific struct-member offset.
+
+    This function collects both HLIL-derived and direct MLIL use-sites where a given
+    struct member (identified by its base variable and byte offset) is read or written.
+
+    It first gathers HLIL variable references to the structs base variable, then
+    inspects each HLIL instructions operands for dereference or field operations
+    matching the target offset. Finally, it converts those HLIL sites back to MLIL
+    instructions and appends any direct MLIL references to the struct member.
+
+    Args:
+        bv (BinaryView): The BinaryView in which to search for the struct references.
+        tainted_struct_member (TaintedStructMember):
+            A `TaintedStructMember` containing:
+            - `loc_address`: the address where the struct member was first tainted,
+            - `hlil_var`: the HLIL variable object representing the struct,
+            - `offset`: the byte offset of the field within the struct.
+
+    Returns:
+        List[MediumLevelILInstruction]:
+            A list of MLIL instructions that access the specified struct member,
+            combining those found via HLIL operand traversal and direct MLIL variable refs.
+    """
     def traverse_operand(op):
         if not isinstance(op, HighLevelILInstruction):
             return False
@@ -57,9 +95,7 @@ def get_struct_field_refs(bv, tainted_struct_member: TaintedStructMember):
         return False
 
     hlil_use_sites = set()
-    # func_object = analysis.get_functions_containing(
-    #     tainted_struct_member.loc_address
-    # )[0]
+
     func_object = bv.get_functions_containing(tainted_struct_member.loc_address)[0]
     var_refs_hlil = func_object.get_hlil_var_refs(tainted_struct_member.hlil_var)
     var_refs_mlil = func_object.get_mlil_var_refs(tainted_struct_member.variable)
@@ -80,33 +116,32 @@ def get_struct_field_refs(bv, tainted_struct_member: TaintedStructMember):
     return mlil_use_sites
 
 
-def param_var_map(params, propagated_vars: list[TaintedVar]) -> dict:
+def param_var_map(
+    params: Sequence[MediumLevelILVar], propagated_vars: Sequence[TaintedVar]
+) -> Dict[MediumLevelILVar, Tuple[int, int]]:
     """
-    `param_var_map` This function is used within the `get_sliced_calls` function to get a parameter variable map of the propagated variables used within a call
+    Build a map of MLIL call parameters that correspond to your propagated taint variables.
+
+    Scans each `param` in order and, if it matches one of your `propagated_vars`, assigns:
+      - the “match count” (1-based increment as you discover matches), and
+      - the parameter's position in the argument list (also 1-based).
 
     Args:
-        params: list of the parameters in the function call
-        propagated_vars: list tainted variables
+        params:   The sequence of MLIL call-site parameters.
+        propagated_vars:   The list of `TaintedVar` instances you've already discovered.
 
     Returns:
-        returns a dictionary of the call information regarding the propagated parameters
-        param: (parameter index, parameter position index)
+        A dict where each key is a `param` that matched a `propagated_var`, and the
+        value is a `(match_count, param_position_index)` tuple.
     """
-    param_info = {}
-    param_index = 0
-
-    for param in params:
-        str_param = str(param)
-        param_pos_index = params.index(param) + 1
-
-        for var in propagated_vars:
-            if str(var.variable) == str_param:
-                param_index += 1
-                if str_param not in param_info:
-                    param_info[param] = (param_index, param_pos_index)
-
-        param_index = 0
-
+    param_info: Dict[MediumLevelILVar, Tuple[int, int]] = {}
+    for pos, param in enumerate(params, start=1):
+        for idx, tv in enumerate(propagated_vars, start=1):
+            if str(param) == str(tv.variable):
+                # only record the first match per param
+                if param not in param_info:
+                    param_info[param] = (idx, pos)
+                break
     return param_info
 
 
@@ -210,6 +245,38 @@ def get_struct_field_name(loc: MediumLevelILInstruction):
             f"[Error] Could not find struct member name\n[LOC (unhandled)]: {loc}"
         )
 
+def get_mlil_glob_refs(
+    analysis: Analysis, function_object: Function, var_to_trace: TaintedGlobal
+) -> list:
+    """
+    Finds all MLIL instructions that reference a given global variable.
+
+    This function identifies and collects use sites of a `TaintedGlobal` object by scanning
+    all MLIL instructions in the specified function. It ensures accurate matches by validating
+    symbol references and filtering false positives.
+
+    Args:
+        analysis (Analysis): The analysis context containing the Binary Ninja BinaryView.
+        function_object (Function): The function in which to search for global variable references.
+        var_to_trace (TaintedGlobal): The global variable to track in the function.
+
+    Returns:
+        list: A list of MLIL instructions that reference `var_to_trace`.
+    """
+    variable_use_sites = []
+    if var_to_trace.variable in analysis.glob_refs_memoized.keys():
+        return analysis.glob_refs_memoized[var_to_trace.variable]
+
+    for instr_mlil in function_object.mlil.instructions:
+        for op in flat(instr_mlil.operands):
+            if isinstance(op, MediumLevelILConstPtr):
+                symbol = get_symbol_from_const_ptr(analysis.bv, op)
+                if symbol and symbol.name == var_to_trace.variable:
+                    variable_use_sites.append(instr_mlil)
+
+    analysis.glob_refs_memoized[var_to_trace.variable] = variable_use_sites
+    return variable_use_sites
+
 
 def trace_tainted_variable(
     analysis,
@@ -241,39 +308,39 @@ def trace_tainted_variable(
     """
     collected_locs: list[TaintedLOC] = []
     already_iterated: list = []
-    glob_refs_memoized = {}
+    # glob_refs_memoized = {}
 
-    def get_mlil_glob_refs(
-        function_object: Function, var_to_trace: TaintedGlobal
-    ) -> list:
-        """
-        Finds all MLIL instructions that reference a given global variable.
+    # def get_mlil_glob_refs(
+    #     function_object: Function, var_to_trace: TaintedGlobal
+    # ) -> list:
+    #     """
+    #     Finds all MLIL instructions that reference a given global variable.
 
-        This function identifies and collects use sites of a `TaintedGlobal` object by scanning
-        all MLIL instructions in the specified function. It ensures accurate matches by validating
-        symbol references and filtering false positives.
+    #     This function identifies and collects use sites of a `TaintedGlobal` object by scanning
+    #     all MLIL instructions in the specified function. It ensures accurate matches by validating
+    #     symbol references and filtering false positives.
 
-        Args:
-            analysis (Analysis): The analysis context containing the Binary Ninja BinaryView.
-            function_object (Function): The function in which to search for global variable references.
-            var_to_trace (TaintedGlobal): The global variable to track in the function.
+    #     Args:
+    #         analysis (Analysis): The analysis context containing the Binary Ninja BinaryView.
+    #         function_object (Function): The function in which to search for global variable references.
+    #         var_to_trace (TaintedGlobal): The global variable to track in the function.
 
-        Returns:
-            list: A list of MLIL instructions that reference `var_to_trace`.
-        """
-        variable_use_sites = []
-        if var_to_trace.variable in glob_refs_memoized.keys():
-            return glob_refs_memoized[var_to_trace.variable]
+    #     Returns:
+    #         list: A list of MLIL instructions that reference `var_to_trace`.
+    #     """
+    #     variable_use_sites = []
+    #     if var_to_trace.variable in glob_refs_memoized.keys():
+    #         return glob_refs_memoized[var_to_trace.variable]
 
-        for instr_mlil in function_object.mlil.instructions:
-            for op in flat(instr_mlil.operands):
-                if isinstance(op, MediumLevelILConstPtr):
-                    symbol = get_symbol_from_const_ptr(analysis.bv, op)
-                    if symbol and symbol.name == var_to_trace.variable:
-                        variable_use_sites.append(instr_mlil)
+    #     for instr_mlil in function_object.mlil.instructions:
+    #         for op in flat(instr_mlil.operands):
+    #             if isinstance(op, MediumLevelILConstPtr):
+    #                 symbol = get_symbol_from_const_ptr(analysis.bv, op)
+    #                 if symbol and symbol.name == var_to_trace.variable:
+    #                     variable_use_sites.append(instr_mlil)
 
-        glob_refs_memoized[var_to_trace.variable] = variable_use_sites
-        return variable_use_sites
+    #     glob_refs_memoized[var_to_trace.variable] = variable_use_sites
+    #     return variable_use_sites
 
     def get_connected_var(
         function_object: Function,
@@ -302,7 +369,7 @@ def trace_tainted_variable(
                     connected_candidates.append((mlil.address, mlil.vars_read[0]))
 
         elif isinstance(target_variable, TaintedGlobal):
-            refs = get_mlil_glob_refs(function_object, target_variable)
+            refs = get_mlil_glob_refs(analysis, function_object, target_variable)
 
             for ref in refs:
                 mlil = function_object.get_llil_at(ref.address).mlil
@@ -380,7 +447,7 @@ def trace_tainted_variable(
         already_iterated.append(var_to_trace)
 
         if isinstance(var_to_trace, TaintedGlobal):
-            variable_use_sites = get_mlil_glob_refs(function_object, var_to_trace)
+            variable_use_sites = get_mlil_glob_refs(analysis, function_object, var_to_trace)
 
         elif isinstance(var_to_trace, TaintedStructMember):
             variable_use_sites = get_struct_field_refs(analysis.bv, var_to_trace)
@@ -538,6 +605,7 @@ def trace_tainted_variable(
                 # Handle the case that we get a MLIL_CALL and we want to essentially taint the data passed into it or assigned from it
                 # variables tainted here are marked with "maybe" as the confidence level.
                 case int(MediumLevelILOperation.MLIL_CALL):
+                    #:TODO implement this part
                     imported_function = analysis.is_function_imported(instr_mlil)
                     if imported_function:
                         analysis.analyze_imported_function(imported_function)

@@ -16,33 +16,78 @@ from .auxiliary import *
 from binaryninja.enums import MediumLevelILOperation
 from binaryninja import BinaryView
 from collections import OrderedDict
+from typing import List, Union
 
 
 class Analysis:
     def __init__(
-        self, binaryview: BinaryView, verbose=False, libraries_mapped: dict = None
+        self,
+        binaryview: BinaryView,
+        verbose: bool = False,
+        libraries_mapped: dict = None,
     ):
+        """
+        Performs interprocedural variable flow and taint analysis using Binary Ninja's MLIL and HLIL.
+
+        This class powers core features of BinGoggles such as forward/backward slicing, taint propagation,
+        interprocedural variable tracking, and detection of tainted function parameters or return values.
+        It supports analysis of global variables, function parameters, struct members, and imported functions.
+
+        Attributes:
+            bv (BinaryView): The Binary Ninja view object for the binary under analysis.
+            verbose (bool): Enables verbose logging for debugging and visibility.
+            libraries_mapped (dict): Optional mapping of library BinaryViews for analyzing imported functions.
+
+        Methods:
+            get_sliced_calls(data, func_name, propagated_vars) -> dict | None:
+                Identifies function calls in the slice where tainted variables are passed as arguments.
+
+            tainted_slice(target, var_type, output, slice_type) -> tuple[list, str, list[Variable]] | None:
+                Performs forward or backward taint slicing on the specified variable within its function.
+
+            complete_slice(target, var_type, slice_type, output, analyze_imported_functions) -> dict:
+                Traces taint propagation across functions, forming a complete variable flow graph.
+
+            is_function_param_tainted(function_node, tainted_params, ...) -> InterprocTaintResult:
+                Recursively determines whether a function's parameters or return value become tainted.
+        """
         self.bv = binaryview
         self.verbose = verbose
         self.libraries_mapped = libraries_mapped
+        self.glob_refs_memoized = {}
 
         if self.verbose:
             self.is_function_param_tainted_printed = False
 
     def get_sliced_calls(
-        self, data: list, func_name: str, propagated_vars: list
+        self,
+        data: List[TaintedLOC],
+        func_name: str,
+        propagated_vars: List[
+            Union[TaintedVar, TaintedGlobal, TaintedAddressOfField, TaintedStructMember]
+        ],
     ) -> dict | None:
         """
-        This function will take slice data and output the tainted function calls
+        Identify and extract function calls within a tainted slice, along with their metadata.
+
+        This method scans through a list of tainted locations (TaintedLOC) and collects all
+        MLIL function call instructions where any of the arguments match propagated tainted variables.
+        For each call, it attempts to resolve the destination function and builds a parameter map
+        of tainted arguments.
 
         Args:
-            data (list[TaintedLOC]): Slice data from either of the tainted slices functions
-            func_name (str): The name of the function we're doing analysis in
-            propagated_vars (list[TaintedVar]): A list of all of the tainted variables
+            data (List[TaintedLOC]): The list of locations visited during the taint slice.
+            func_name (str): The name of the function being analyzed.
+            propagated_vars (List[Union[TaintedVar, TaintedGlobal, TaintedAddressOfField, TaintedStructMember]]):
+                The list of tainted variables that were propagated during the slice.
 
-        Return:
-            This function returns a dictionary with the key being the parent function name and LOC address and the data being
-            the call name, the address of the function call, the LOC, and the parameter map
+        Returns:
+            dict | None: A dictionary mapping `(func_name, call_addr)` tuples to a tuple containing:
+                - The resolved call target's name (`str`)
+                - The target function's start address (`int`)
+                - The MLIL call instruction (`MediumLevelILInstruction`)
+                - A dictionary of argument indices to their tainted variable matches (`dict`)
+            Returns `None` if no matching calls are found.
         """
         if self.verbose:
             print(
@@ -90,21 +135,29 @@ class Analysis:
         slice_type: SliceType = SliceType.Forward,
     ) -> tuple[list, str, list[Variable]] | None:
         """
-        This function will preform variable flow analysis on a variable or function parameter of interest (going forwards)
+        Perform a taint analysis slice (forward or backward) from a specified target variable.
+
+        This function identifies and traces the propagation of a variable (local, global,
+        struct member, or function parameter) through a function using either forward or
+        backward slicing. It returns a list of program locations affected by the variable
+        and a list of propagated variables.
 
         Args:
-            target (tuple[int, str]): A list of 2 inputs, the first being the address and the second being the variable name
-            var_type (SlicingID): Defined if slicing a variable or a function parameter
-            output (OutputMode): Type of output, can be returned or printed, default set to returned
+            target (TaintTarget): The target variable to slice from, including its name and location.
+            var_type (SlicingID): The classification of the target variable
+                (FunctionVar, GlobalVar, StructMember, or FunctionParam).
+            output (OutputMode, optional): Whether to print the slice results or return them.
+                Defaults to OutputMode.Returned.
+            slice_type (SliceType, optional): Direction of the slice (Forward or Backward).
+                Defaults to SliceType.Forward.
 
         Returns:
-            A tuple containing the sliced data, the function name, and the propagated variables
+            tuple[list, str, list[Variable]] | None:
+                - A list of `TaintedLOC` objects representing the instructions visited during the slice.
+                - The name of the function containing the slice.
+                - A list of variables propagated during the slice.
+                Returns `None` if the analysis fails due to unresolved instruction or function context.
         """
-        # if self.verbose:
-        #     print(
-        #         f"\n{Fore.LIGHTRED_EX}tainted_slice{Fore.RESET}({Fore.MAGENTA}self, target: list[int, str], var_type: SlicingID, output: OutputMode = OutputMode.Returned{Fore.RESET})\n{f'{Fore.GREEN}={Fore.RESET}'*114}"
-        #     )
-
         if hasattr(target.loc_address, "start"):
             func_obj = target.loc_address
 
@@ -412,19 +465,36 @@ class Analysis:
         analyze_imported_functions=False,
     ) -> dict:
         """
-        Complete slice operation that propagates taint through function calls in a program.
+        Perform a complete interprocedural taint slice, including cross-function propagation.
+
+        This method begins at a specified taint source (variable or parameter) and traces
+        taint propagation through a function and all subsequent function calls where taint
+        is passed as a parameter. It builds a call graph-like structure showing how the
+        taint flows across functions.
 
         Args:
-            target (TaintTarget): The target variable or function address to track for taint propagation.
-            var_type (SlicingID): Type of the variable (function parameter or variable).
-            slice_type (SliceType): Type of slice (either forward or backward).
-            output (OutputMode, optional): Determines whether the result is returned or printed. Defaults to OutputMode.Returned.
+            target (TaintTarget): The initial source of taint, defined by an address and variable.
+            var_type (SlicingID): The type of variable to slice from (FunctionVar, FunctionParam, etc.).
+            slice_type (SliceType, optional): The direction of the slice (Forward or Backward).
+                Defaults to SliceType.Forward.
+            output (OutputMode, optional): Whether to print results or return them.
+                Defaults to OutputMode.Returned.
+            analyze_imported_functions (bool, optional): Whether to trace into imported (external) functions.
+                Defaults to False.
 
         Returns:
-            dict: An ordered dictionary where keys are tuples (function_name, variable) and the values are
-                tuples containing the slice data and propagated variables.
-        """
+            dict: An ordered dictionary mapping each function slice as:
+                {
+                    (function_name, variable): (
+                        List[TaintedLOC],            # Slice instructions
+                        List[TaintedVar]             # Variables tainted in this slice
+                    ),
+                    ...
+                }
 
+        Raises:
+            TypeError: If the starting function cannot be resolved from the provided target address.
+        """
         # Initialization of necessary data structures
         propagation_cache = {}  # To store the slice data and propagated variables
         propagated_vars = []  # List of variables that have been tainted and propagated
@@ -560,18 +630,31 @@ class Analysis:
         sub_functions_analyzed=0,
     ):
         """
-        Determine if a function's parameter is tainted by tracking the tainted parameter's path and analyzing
-        whether it influences other parameter paths.
+        Perform interprocedural taint analysis to determine if a function's parameters or return value are tainted.
+
+        This method takes an entry function and a set of tainted parameters, then performs a taint analysis
+        on the function body and recursively on any called sub-functions to determine whether any of its parameters
+        or return value are affected. It tracks assignments, calls, field operations, and propagates taint accordingly.
 
         Args:
-            function_node (int | Function): The target function, specified either by its starting address (int) or as a Binary Ninja Function object.
-            tainted_params (Variable | str | list[Variable]): The parameter(s) to check for taint. This can be a single Variable object, a string representing the parameter name, or a list of Variable objects.
-            origin_function (Function): This parameter is used for internal tracking and paremeter matching (do not touch this parameter).
-            tainted_param_map (dict): A dictionary mapping original parameters to their tainted parameters.
+            function_node (int | Function): Either the starting address or Binary Ninja `Function` object to analyze.
+            tainted_params (Variable | str | list[Variable]): The parameter(s) to start tracking taint from.
+                Can be a single Variable, a parameter name (str), or a list of Variable objects.
+            origin_function (Function, optional): Internally used to identify the root function when tracing across calls.
+            original_tainted_params (Variable | str | list[Variable], optional): Original tainted input for context.
+            tainted_param_map (dict, optional): A mapping from original parameters to other discovered tainted parameters.
+            recursion_limit (int, optional): The maximum recursion depth for interprocedural analysis. Defaults to 8.
+            sub_functions_analyzed (int, optional): Internal counter for recursion depth tracking.
 
         Returns:
-            set: A set of parameter names (as strings) that are determined to be tainted within the function (including your inputted list of parameters).
-            bool: Whether or not the return variable is tainted
+            InterprocTaintResult: A structured result containing:
+                - `tainted_param_names` (set[str]): Parameter names determined to be tainted.
+                - `original_tainted_variables`: The original tainted parameter(s) used as input.
+                - `is_return_tainted` (bool): Whether the return value of the function is tainted.
+                - `tainted_param_map` (dict): A mapping of original parameter to other tainted parameters.
+
+        Raises:
+            ValueError: If the given address does not resolve to a function.
         """
         if tainted_param_map is None:
             tainted_param_map = {}
@@ -905,6 +988,7 @@ class Analysis:
         else:
             return False
 
+    #:TODO implement this
     def analyze_imported_function(self, func_symbol):
         for _, lib_binary_view in self.libraries_mapped.items():
             for function in lib_binary_view.functions:
