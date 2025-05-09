@@ -214,7 +214,9 @@ class TaintedAddressOfField:
                 f"{Fore.LIGHTMAGENTA_EX}ReferenceVar + OffsetVar Tainted{Fore.RESET}"
             )
         elif var_taint == TaintConfidence.MaybeTainted:
-            taint_status = f"{Fore.LIGHTMAGENTA_EX}Byte(s) at reference Maybe Tainted{Fore.RESET}"
+            taint_status = (
+                f"{Fore.LIGHTMAGENTA_EX}Byte(s) at reference Maybe Tainted{Fore.RESET}"
+            )
         elif offset_var_taint == TaintConfidence.MaybeTainted:
             taint_status = f"{Fore.LIGHTMAGENTA_EX}OffsetVar Maybe Tainted{Fore.RESET}"
         else:
