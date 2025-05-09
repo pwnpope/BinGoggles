@@ -1,27 +1,32 @@
-#include <stdlib.h>
-#include <string.h>
 #include <stdio.h>
-#include <unistd.h>
 
+void foo(char* a, char* b) {
+    char x[256];
 
-char *combine(char *buf_one, char* buf_two) {
-    return strcat(buf_one, buf_two);
+    // Use a and b explicitly to prevent optimization
+    printf("Received a: %s, b: %s\n", a, b);  // Printing the values of a and b
+
+    puts("Reading input into x...");
+    fgets(x, sizeof(x), stdin);  // Read user input into x
+
+    puts("Doing something else...");
+    char z[256];
+    snprintf(z, sizeof(z), "Processed: %s", x);  // Process input and store it in z
+
+    // Now use b to store the address of x
+    b = x; 
+
+    // Print something related to b
+    printf("Now b points to: %s\n", b);  // Will print contents of x, since b = x
 }
 
 int main() {
-    char user_input_one[0x50] = {0};
-    char user_input_two[0x50] = {0};
+    // Initialize input and b with meaningful values
+    char input[] = "Initial input";  // String for input
+    char b[256] = "Initial b value"; // Initial value for b
 
-    printf("Input One: ");
-    fflush(stdout);
-    read(0, user_input_one, 0x50);
-
-    printf("Input Two: ");
-    fflush(stdout);
-    read(0, user_input_two, 0x50);
-
-
-    printf("Thanks, your combined input is: %s", combine(user_input_one, user_input_two));
-    printf("Individually:\nInput One: %s\nInput Two: %s", user_input_one, user_input_two);
+    // Call foo, passing meaningful values for a and b
+    foo(input, b);
+    
     return 0;
 }
