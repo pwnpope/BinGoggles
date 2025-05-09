@@ -34,7 +34,6 @@ Using BinGoggles with `Hugsy Headless <https://github.com/hugsy/binja-headless>`
 	analysis.tainted_slice(
 		target=TaintTarget(0x00401212, "rdi"),
 		var_type=SlicingID.FunctionVar,
-		output=OutputMode.Printed,
 	)
 
 

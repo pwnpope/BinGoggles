@@ -3,7 +3,7 @@
 ## 📚 Documentation & Packaging
 - [x] Finalize the README
 - [ ] Review and enhance all docstrings
-- [ ] Auto-generate documentation from docstrings (consider GitHub Pages)
+- [X] Auto-generate documentation from docstrings (consider GitHub Pages)
 - [ ] Document test cases in test/test_cases.py
 - [x] Publish on GitHub
 
@@ -43,6 +43,7 @@
 - [ ] Rename vfa.py to bg.py for clarity
 - [ ] Fix `get_struct_field_name` to handle nested field names
 - [ ] Improve `is_function_param_tainted` to account for additional SSA MLIL operations
+- [ ] Improve the speed of the global and struct member analysis if possible
 
 ## 🎯 Usability
 - [x] Add a Target class for defining analysis targets

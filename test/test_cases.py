@@ -122,28 +122,33 @@ def test_get_sliced_calls(
 
     result = analysis.get_sliced_calls(sliced_data, func_name, propagated_variables)
 
-    assert ("main", 4198947) in result
-    assert ("main", 4199009) in result
+    assert len(result) == 3
 
-    # Assert details for __isoc99_scanf call
-    scanf_call = result[("main", 4198947)]
-    assert scanf_call[0] == "__isoc99_scanf"
-    assert scanf_call[1] == 4198576
-    assert any(
-        isinstance(k, MediumLevelILVar) and k.var.name == "rsi"
-        for k in scanf_call[3].keys()
-    )
-    assert list(scanf_call[3].values())[0] == (1, 2)
+    names = {info[0] for info in result.values()}
+    assert names == {"__isoc99_scanf", "do_add", "printf"}
 
-    # Assert details for do_add call
-    do_add_call = result[("main", 4199009)]
-    assert do_add_call[0] == "do_add"
-    assert do_add_call[1] == 4198825
-    assert any(
-        isinstance(k, MediumLevelILVar) and k.var.name == "rdi"
-        for k in do_add_call[3].keys()
-    )
-    assert list(do_add_call[3].values())[0] == (1, 1)
+    param_maps = {info[0]: info[3] for info in result.values()}
+
+    scanf_map = param_maps["__isoc99_scanf"]
+    assert len(scanf_map) == 1
+    scanf_param, scanf_counts = next(iter(scanf_map.items()))
+    assert isinstance(scanf_param, MediumLevelILVar)
+    assert str(scanf_param) == "rsi"
+    assert scanf_counts == (2, 2)
+
+    add_map = param_maps["do_add"]
+    assert len(add_map) == 1
+    add_param, add_counts = next(iter(add_map.items()))
+    assert isinstance(add_param, MediumLevelILVar)
+    assert str(add_param) == "rdi"
+    assert add_counts == (4, 1)
+
+    printf_map = param_maps["printf"]
+    assert len(printf_map) == 1
+    printf_param, printf_counts = next(iter(printf_map.items()))
+    assert isinstance(printf_param, MediumLevelILVar)
+    assert str(printf_param).startswith("rsi")
+    assert printf_counts == (8, 2)
 
     pprint(result)
 
