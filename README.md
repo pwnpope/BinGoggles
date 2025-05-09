@@ -6,7 +6,7 @@
     - In short we're gathering the full path of a variable.
 
 
-![](images/bingoggles.jpeg)
+![](images/bingoggles.png)
 
 ## How is BinGoggles unique?
 - Platform agnostic, working on linux, mac, and windows ✅ 
