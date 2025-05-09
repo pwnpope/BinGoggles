@@ -14,10 +14,14 @@ from colorama import Fore
 from .bingoggles_types import *
 from .auxiliary import *
 from binaryninja.enums import MediumLevelILOperation
+from binaryninja import BinaryView
+from collections import OrderedDict
 
 
 class Analysis:
-    def __init__(self, binaryview, verbose=None, libraries_mapped: dict = None):
+    def __init__(
+        self, binaryview: BinaryView, verbose=False, libraries_mapped: dict = None
+    ):
         self.bv = binaryview
         self.verbose = verbose
         self.libraries_mapped = libraries_mapped
@@ -41,7 +45,7 @@ class Analysis:
             the call name, the address of the function call, the LOC, and the parameter map
         """
         if self.verbose:
-            raise TypeError(
+            print(
                 f"\n{Fore.LIGHTRED_EX}get_sliced_calls{Fore.RESET}({Fore.MAGENTA}self, data: list, func_name: str, verbose: list{Fore.RESET})\n{f'{Fore.GREEN}={Fore.RESET}' * 65}"
             )
 
@@ -53,7 +57,7 @@ class Analysis:
 
             if int(loc.operation) == int(MediumLevelILOperation.MLIL_CALL):
                 param_map = param_var_map(loc.params, propagated_vars)
-                call_function_object = addr_to_func(self, int(str(loc.dest), 16))
+                call_function_object = addr_to_func(self.bv, int(str(loc.dest), 16))
                 if call_function_object:
                     function_addr = call_function_object.start
                     call_name = call_function_object.name
@@ -78,11 +82,12 @@ class Analysis:
         return function_calls
 
     @cache
-    def tainted_forward_slice(
+    def tainted_slice(
         self,
         target: TaintTarget,
         var_type: SlicingID,
         output: OutputMode = OutputMode.Returned,
+        slice_type: SliceType = SliceType.Forward,
     ) -> tuple[list, str, list[Variable]] | None:
         """
         This function will preform variable flow analysis on a variable or function parameter of interest (going forwards)
@@ -97,14 +102,14 @@ class Analysis:
         """
         # if self.verbose:
         #     print(
-        #         f"\n{Fore.LIGHTRED_EX}tainted_forward_slice{Fore.RESET}({Fore.MAGENTA}self, target: list[int, str], var_type: SlicingID, output: OutputMode = OutputMode.Returned{Fore.RESET})\n{f'{Fore.GREEN}={Fore.RESET}'*114}"
+        #         f"\n{Fore.LIGHTRED_EX}tainted_slice{Fore.RESET}({Fore.MAGENTA}self, target: list[int, str], var_type: SlicingID, output: OutputMode = OutputMode.Returned{Fore.RESET})\n{f'{Fore.GREEN}={Fore.RESET}'*114}"
         #     )
 
         if hasattr(target.loc_address, "start"):
             func_obj = target.loc_address
 
         else:
-            func_obj = addr_to_func(self, target.loc_address)
+            func_obj = addr_to_func(self.bv, target.loc_address)
             if func_obj is None:
                 print(
                     f"[{Fore.RED}Error{Fore.RESET}] Could not find a function containing address: {target.loc_address}"
@@ -114,18 +119,22 @@ class Analysis:
         sliced_func = {}
         propagated_vars = []
 
+        instr_mlil = func_obj.get_llil_at(target.loc_address).mlil
+        if instr_mlil is None:
+            print(
+                f"[{Fore.RED}Error{Fore.RESET}] Could not find MLIL instruction at address: {target.loc_address}"
+            )
+            return None
+
         # Start by tracing the initial target variable
         match var_type:
             # Handle case where the target var for slicing is a function var
             case SlicingID.FunctionVar:
-                instr = func_obj.get_llil_at(target.loc_address)
-                instr_mlil = instr.mlil
-                instr_hlil = instr.hlil
+                var_object = str_to_var_object(target.variable, func_obj)
 
-                if instr_mlil:
-                    var_object = str_to_var_object(target.variable, func_obj)
-
-                    if var_object:
+                if var_object:
+                    # Handle regular variables
+                    if slice_type == SliceType.Forward:
                         sliced_func, propagated_vars = trace_tainted_variable(
                             analysis=self,
                             function_object=func_obj,
@@ -134,111 +143,181 @@ class Analysis:
                             trace_type=SliceType.Forward,
                         )
 
+                    elif slice_type == SliceType.Backward:
+                        sliced_func, propagated_vars = trace_tainted_variable(
+                            analysis=self,
+                            function_object=func_obj,
+                            mlil_loc=instr_mlil,
+                            variable=var_object,
+                            trace_type=SliceType.Backward,
+                        )
+
                     else:
-                        # handle Globals
-                        symbol = [
-                            s
-                            for s in self.bv.get_symbols()
-                            if int(s.type) == int(SymbolType.DataSymbol)
-                            and s.name == target.variable
-                        ]
-                        if symbol:
-                            constr_ptr = None
+                        raise TypeError(
+                            f"[{Fore.RED}ERROR{Fore.RESET}] slice_type must be either forward or backward"
+                        )
 
-                            for op in flat(instr_mlil.operands):
-                                if hasattr(op, "address"):
-                                    s = get_symbol_from_const_ptr(self, op)
-                                    if s and s == symbol:
-                                        constr_ptr = op
-                                        break
+            case SlicingID.GlobalVar:
+                # Handle Globals
+                symbol = [
+                    s
+                    for s in self.bv.get_symbols()
+                    if int(s.type) == int(SymbolType.DataSymbol)
+                    and s.name == target.variable
+                ]
+                if symbol:
+                    constr_ptr = None
 
-                            tainted_global = TaintedGlobal(
-                                variable=target.variable,
-                                confidence_level=TaintConfidence.Tainted,
+                    for op in flat(instr_mlil.operands):
+                        if hasattr(op, "address"):
+                            s = get_symbol_from_const_ptr(self.bv, op)
+                            if s and s == symbol:
+                                constr_ptr = op
+                                break
+
+                    tainted_global = TaintedGlobal(
+                        variable=target.variable,
+                        confidence_level=TaintConfidence.Tainted,
+                        loc_address=target.loc_address,
+                        const_ptr=constr_ptr,
+                        symbol_object=symbol,
+                    )
+
+                    if slice_type == SliceType.Forward:
+                        sliced_func, propagated_vars = trace_tainted_variable(
+                            analysis=self,
+                            function_object=func_obj,
+                            mlil_loc=instr_mlil,
+                            variable=tainted_global,
+                            trace_type=SliceType.Forward,
+                        )
+
+                    elif slice_type == SliceType.Backward:
+                        sliced_func, propagated_vars = trace_tainted_variable(
+                            analysis=self,
+                            function_object=func_obj,
+                            mlil_loc=instr_mlil,
+                            variable=tainted_global,
+                            trace_type=SliceType.Backward,
+                        )
+
+                    else:
+                        raise TypeError(
+                            f"[{Fore.RED}ERROR{Fore.RESET}] slice_type must be either forward or backward"
+                        )
+
+            case SlicingID.StructMember:
+                # Handle struct member references/derefernces
+                instr_hlil = func_obj.get_llil_at(target.loc_address).hlil
+                struct_offset = instr_mlil.ssa_form.src.offset
+                source = instr_mlil.src
+                source_hlil = instr_hlil.src
+                base_var = source_hlil.var
+
+                if instr_hlil.operation == int(HighLevelILOperation.HLIL_ASSIGN):
+                    destination = instr_hlil.dest
+
+                    if destination.operation == int(
+                        HighLevelILOperation.HLIL_DEREF_FIELD
+                    ):
+                        struct_offset = destination.offset
+                        base_expr = destination.src
+
+                        if base_expr.operation == int(HighLevelILOperation.HLIL_VAR):
+                            base_var = base_expr.var
+                            tainted_struct_member = TaintedStructMember(
                                 loc_address=target.loc_address,
-                                const_ptr=constr_ptr,
-                                symbol_object=symbol,
+                                member=target.variable,
+                                offset=struct_offset,
+                                hlil_var=base_var,
+                                variable=instr_mlil.dest.var,
+                                confidence_level=TaintConfidence.Tainted,
                             )
 
+                            if slice_type == SliceType.Forward:
+                                sliced_func, propagated_vars = trace_tainted_variable(
+                                    analysis=self,
+                                    function_object=func_obj,
+                                    mlil_loc=instr_mlil,
+                                    variable=tainted_struct_member,
+                                    trace_type=SliceType.Forward,
+                                )
+
+                            elif slice_type == SliceType.Backward:
+                                sliced_func, propagated_vars = trace_tainted_variable(
+                                    analysis=self,
+                                    function_object=func_obj,
+                                    mlil_loc=instr_mlil,
+                                    variable=tainted_struct_member,
+                                    trace_type=SliceType.Backward,
+                                )
+
+                            else:
+                                raise TypeError(
+                                    f"[{Fore.RED}ERROR{Fore.RESET}] slice_type must be either forward or backward"
+                                )
+
+                elif instr_mlil.operation == int(MediumLevelILOperation.MLIL_SET_VAR):
+                    if source.operation == int(MediumLevelILOperation.MLIL_LOAD_STRUCT):
+                        tainted_struct_member = TaintedStructMember(
+                            loc_address=target.loc_address,
+                            member=target.variable,
+                            offset=struct_offset,
+                            hlil_var=base_var,
+                            variable=instr_mlil.src.src.var,
+                            confidence_level=TaintConfidence.Tainted,
+                        )
+
+                        if slice_type == SliceType.Forward:
                             sliced_func, propagated_vars = trace_tainted_variable(
                                 analysis=self,
                                 function_object=func_obj,
                                 mlil_loc=instr_mlil,
-                                variable=tainted_global,
+                                variable=tainted_struct_member,
                                 trace_type=SliceType.Forward,
                             )
 
-                        # handle struct member references/derefernces
+                        elif slice_type == SliceType.Backward:
+                            sliced_func, propagated_vars = trace_tainted_variable(
+                                analysis=self,
+                                function_object=func_obj,
+                                mlil_loc=instr_mlil,
+                                variable=tainted_struct_member,
+                                trace_type=SliceType.Backward,
+                            )
+
                         else:
-                            if instr_hlil.operation == int(
-                                HighLevelILOperation.HLIL_ASSIGN
-                            ):
-                                destination = instr_hlil.dest
+                            raise TypeError(
+                                f"[{Fore.RED}ERROR{Fore.RESET}] slice_type must be either forward or backward"
+                            )
 
-                                if destination.operation == int(
-                                    HighLevelILOperation.HLIL_DEREF_FIELD
-                                ):
-                                    struct_offset = destination.offset
-                                    base_expr = destination.src
+                    elif source.operation == int(MediumLevelILOperation.MLIL_VAR_FIELD):
+                        tainted_struct_member = TaintedStructMember(
+                            loc_address=target.loc_address,
+                            member=target.variable,
+                            offset=struct_offset,
+                            hlil_var=base_var,
+                            variable=instr_mlil.src.src,
+                            confidence_level=TaintConfidence.Tainted,
+                        )
 
-                                    if base_expr.operation == int(
-                                        HighLevelILOperation.HLIL_VAR
-                                    ):
-                                        base_var = base_expr.var
-                                        tainted_struct_member = TaintedStructMember(
-                                            loc_address=target.loc_address,
-                                            member=target.variable,
-                                            offset=struct_offset,
-                                            hlil_var=base_var,
-                                            variable=instr_mlil.dest.var,
-                                            confidence_level=TaintConfidence.Tainted,
-                                        )
+                        if slice_type == SliceType.Forward:
+                            sliced_func, propagated_vars = trace_tainted_variable(
+                                analysis=self,
+                                function_object=func_obj,
+                                mlil_loc=instr_mlil,
+                                variable=tainted_struct_member,
+                                trace_type=SliceType.Forward,
+                            )
 
-                                        sliced_func, propagated_vars = (
-                                            trace_tainted_variable(
-                                                analysis=self,
-                                                function_object=func_obj,
-                                                mlil_loc=instr_mlil,
-                                                variable=tainted_struct_member,
-                                                trace_type=SliceType.Forward,
-                                            )
-                                        )
-
-                            elif instr_mlil.operation == int(
-                                MediumLevelILOperation.MLIL_SET_VAR
-                            ):
-                                struct_offset = instr_mlil.ssa_form.src.offset
-                                source = instr_mlil.src
-                                source_hlil = instr_hlil.src
-
-                                if source.operation == int(
-                                    MediumLevelILOperation.MLIL_LOAD_STRUCT
-                                ):
-                                    base_var = source_hlil.var
-                                    tainted_struct_member = TaintedStructMember(
-                                        loc_address=target.loc_address,
-                                        member=target.variable,
-                                        offset=struct_offset,
-                                        hlil_var=base_var,
-                                        variable=instr_mlil.src.src.var,
-                                        confidence_level=TaintConfidence.Tainted,
-                                    )
-
-                                    sliced_func, propagated_vars = (
-                                        trace_tainted_variable(
-                                            analysis=self,
-                                            function_object=func_obj,
-                                            mlil_loc=instr_mlil,
-                                            variable=tainted_struct_member,
-                                            trace_type=SliceType.Forward,
-                                        )
-                                    )
-
-                                elif source.operation == int(
-                                    MediumLevelILOperation.MLIL_VAR_FIELD
-                                ):
-                                    #:TODO work on this, this is the struct field referencing
-                                    pass
+                        elif slice_type == SliceType.Backward:
+                            sliced_func, propagated_vars = trace_tainted_variable(
+                                analysis=self,
+                                function_object=func_obj,
+                                mlil_loc=instr_mlil,
+                                variable=tainted_struct_member,
+                                trace_type=SliceType.Backward,
+                            )
 
                 else:
                     raise ValueError(
@@ -265,7 +344,9 @@ class Analysis:
                     param_refs = func_obj.get_mlil_var_refs(target_param)
 
                 except AttributeError:
-                    raise AttributeError(f"[{Fore.RED}Error{Fore.RESET}] Couldn't find the parameter reference")
+                    raise AttributeError(
+                        f"[{Fore.RED}Error{Fore.RESET}] Couldn't find the parameter reference"
+                    )
 
                 first_ref_addr = [
                     i.address
@@ -319,316 +400,156 @@ class Analysis:
                 )
 
     @cache
-    def tainted_backwards_slice(
-        self,
-        target: TaintTarget,
-        var_type: SlicingID,
-        output: OutputMode = OutputMode.Returned,
-    ) -> tuple[list, str, list[Variable]] | None:
-        """
-        This function will preform variable flow analysis on a variable or variable of interest (going backwards).
-
-        Args:
-            target (tuple[int, str]): An integer and str representing the LOC address of the variable of interest and the str being the variable of interest.
-            output (OutputMode): Results can be either printed back out or returned back for further analysis.
-
-        Returns:
-            A tuple containing the sliced data, the function name, and the propagated variables
-        """
-        if self.verbose:
-            print(
-                f"\n{Fore.LIGHTRED_EX}tainted_backwards_slice{Fore.RESET}({Fore.MAGENTA}self, target: list[int, str], output: OutputMode = OutputMode.Returned{Fore.RESET})\n{f'{Fore.GREEN}={Fore.RESET}'*104}"
-            )
-
-        func_obj = addr_to_func(self, target.loc_address)
-        if func_obj is None:
-            print(
-                f"[{Fore.RED}Error{Fore.RESET}] Could not find a function containing address: {target.loc_address}"
-            )
-            return None
-
-        if var_type == SlicingID.FunctionVar:
-            instr_mlil = func_obj.get_llil_at(target.loc_address).mlil
-            vars_in_loc = func_obj.vars
-            var_to_trace = [var for var in vars_in_loc if var.name == target.variable][
-                0
-            ]
-            print(var_to_trace)
-
-            if var_to_trace:
-                data, propagated_vars = trace_tainted_variable(
-                    analysis=self,
-                    function_object=func_obj,
-                    variable=var_to_trace,
-                    mlil_loc=instr_mlil,
-                    trace_type=SliceType.Backward,
-                )
-
-            else:
-                raise ValueError(
-                    f"{Fore.RED}Couldn't find var_to_trace, you likely input the wrong address or variable name{Fore.RESET}"
-                )
-
-        elif var_type == SlicingID.FunctionParam:
-            if isinstance(target.variable, str):
-                target_param = find_param_by_name(
-                    func_obj=func_obj, param_name=target.variable
-                )
-
-            elif isinstance(target.variable, MediumLevelILVar):
-                target_param = target.variable.var
-
-            else:
-                target_param = find_param_by_name(
-                    func_obj=func_obj, param_name=target.variable.name
-                )
-
-            try:
-                param_ref = func_obj.get_mlil_var_refs(target_param)
-            except AttributeError:
-                return None
-
-            first_ref_addr = [
-                i.address
-                for i in param_ref
-                if func_obj.get_llil_at(i.address).mlil is not None
-            ][0]
-
-            first_ref_mlil = func_obj.get_llil_at(first_ref_addr).mlil
-            data, propagated_vars = trace_tainted_variable(
-                analysis=self,
-                function_object=func_obj,
-                variable=target_param,
-                mlil_loc=first_ref_mlil.address,
-                trace_type=SliceType.Backward,
-            )
-
-        else:
-            raise ValueError(
-                f"[{Fore.RED}SlicingID invalid{Fore.RESET}], got {SlicingID}, expected valid {SlicingID}"
-            )
-
-        match output:
-            case OutputMode.Returned:
-                if self.verbose:
-                    print(
-                        f"Instruction Index | Address | LOC | Target Variable | Propagated Variable\n{'-'*53}"
-                    )
-                    for tainted_mlil in data:
-                        print(tainted_mlil.loc.instr_index, tainted_mlil)
-
-                return data, func_obj.name, propagated_vars
-
-            case OutputMode.Printed:
-                print(
-                    f"\nInstruction Index | Address | LOC | Target Variable | Propagated Variable\n{'-'*53}"
-                )
-                for tainted_mlil in data:
-                    print(tainted_mlil.loc.instr_index, tainted_mlil)
-
-            case _:
-                print(
-                    f"[{Fore.RED}Error{Fore.RESET}] output must be either returned or printed"
-                )
-                return None
-
-    @cache
     def complete_slice(
         self,
         target: TaintTarget,
         var_type: SlicingID,
         slice_type: SliceType,
         output: OutputMode = OutputMode.Returned,
+        analyze_imported_functions=False,
     ) -> dict:
         """
-        `complete_slice` Take an original Slice of the target function and then also slice the function calls.
+        Complete slice operation that propagates taint through function calls in a program.
 
         Args:
-            target (tuple[int, str]): target is the LOC address or the function start address if slicing a function parameter and the string of the variable name or parameter
-            var_type (SlicingID): Variable Type can be either a function parameter or function variable
-            slice_type (SliceType): Type of slice being either forward or backward
-            output (OutputMode): Output mode, data can be either returned or printed out to the screen
+            target (TaintTarget): The target variable or function address to track for taint propagation.
+            var_type (SlicingID): Type of the variable (function parameter or variable).
+            slice_type (SliceType): Type of slice (either forward or backward).
+            output (OutputMode, optional): Determines whether the result is returned or printed. Defaults to OutputMode.Returned.
 
         Returns:
-            Returns a dictionary of the data gathered being the function name as the key and then the slice data and propagated variables as the two pieces of data for each key
+            dict: An ordered dictionary where keys are tuples (function_name, variable) and the values are
+                tuples containing the slice data and propagated variables.
         """
-        propagation_cache = {}
-        propagated_vars = []
-        calls_analyzed = []
 
-        # Get the parent function "complete" slice and sliced calls
-        if slice_type == SliceType.Forward:
-            try:
-                slice_data, og_func_name, propagated_vars = self.tainted_forward_slice(
-                    target=target,
-                    var_type=var_type,
-                )
+        # Initialization of necessary data structures
+        propagation_cache = {}  # To store the slice data and propagated variables
+        propagated_vars = []  # List of variables that have been tainted and propagated
+        calls_analyzed = (
+            []
+        )  # Keeps track of function calls that have already been analyzed
+        call_flow = []  # Maintains the order in which functions are called (call graph)
 
-            except TypeError:
-                raise TypeError(f"[{Fore.RED}ERROR{Fore.RESET}] Address is likely wrong in target | got: {target.loc_address:#0x} for {target.variable}")
-
-        elif slice_type == SliceType.Backward:
-            try:
-                slice_data, og_func_name, propagated_vars = (
-                    self.tainted_backwards_slice(
-                        target=target,
-                        var_type=var_type,
-                    )
-                )
-
-            except TypeError:
-                raise TypeError(
-                    f"[{Fore.RED}ERROR{Fore.RESET}] Address is likely wrong in target | got: {target.loc_address:#0x} for {target.variable}"
-                )
-
-        else:
+        # Try to get the initial slice data and parent function information
+        try:
+            slice_data, og_func_name, propagated_vars = self.tainted_slice(
+                target=target,
+                var_type=var_type,
+                slice_type=slice_type,
+            )
+        except TypeError:
             raise TypeError(
-                f"[{Fore.RED}ERROR{Fore.RESET}] forward_or_backward param must be a valid SliceType ( must be either backward or forward )"
+                f"[{Fore.RED}ERROR{Fore.RESET}] Address is likely wrong in target | got: {target.loc_address:#0x} for {target.variable}"
             )
 
+        # Fetch the parent function object for variable reference
+        parent_func_obj = func_name_to_object(self, og_func_name)
+        key = (og_func_name, str_to_var_object(target.variable, parent_func_obj))
+
+        # Store the initial slice data into the cache and track the call flow
+        propagation_cache[key] = (slice_data, propagated_vars)
+        call_flow.append(key)
+
+        # Get any sliced calls from the initial slice data
         sliced_calls = self.get_sliced_calls(slice_data, og_func_name, propagated_vars)
 
-        # If sliced_calls returns None than we return the already gathered from the parent function, there are
-        # no calls to analyze meaning that the target variable does not propagate out of the parent function
-        parent_function_object = func_name_to_object(self, og_func_name)
-        if sliced_calls == None:
-            propagation_cache[
-                og_func_name, str_to_var_object(target.variable, parent_function_object)
-            ] = (
-                slice_data,
-                propagated_vars,
-            )
-            return propagation_cache
+        # If no sliced calls, return the single function slice result
+        if sliced_calls is None:
+            return OrderedDict((k, propagation_cache[k]) for k in call_flow)
 
-        # Push the first slice data from the parent function into the propagation cache
-        propagation_cache[
-            (og_func_name, str_to_var_object(target.variable, parent_function_object))
-        ] = (slice_data, propagated_vars)
-
-        imported_func_count = 0
-        imported_functions = [
+        # Identify imported functions that should not be analyzed further
+        imported_functions = {
             i.name
             for i in self.bv.get_symbols_of_type(SymbolType.ImportedFunctionSymbol)
-        ]
+        }
 
-        for key, data in sliced_calls.items():
-            if str(data[0]) in imported_functions:
-                imported_func_count += 1
+        # Create a dictionary of sliced calls to analyze
+        sliced_calls_to_analyze = dict(sliced_calls)
 
-        # Get the variable flow from all the function calls it passed through from the original function:
-        sliced_calls_to_analyze = {}
-        sliced_calls_to_analyze.update(sliced_calls)
-
-        if imported_func_count > 0:
-            call_count = len(sliced_calls) - imported_func_count
-        else:
-            call_count = len(sliced_calls)
-
-        while call_count > 0:
+        # Continue analyzing function calls in the call graph until all calls are processed
+        while sliced_calls_to_analyze:
             new_calls = {}
+
+            # Iterate over each function call to be analyzed
             for key, data in sliced_calls_to_analyze.items():
                 call_name = data[0]
-                if call_name in imported_functions:
+                if analyze_imported_functions and call_name in imported_functions:
                     continue
 
-                loc_addr = key[1]
-                func_addr = data[1]
-                param_map = data[3]
-                func_param_to_analyze = None
+                loc_addr = key[1]  # Location address of the function call
+                func_addr = data[1]  # Address of the function being called
+                param_map = data[3]  # Mapping of parameters for the function call
+                func_param_to_analyze = (
+                    None  # Variable to store the function parameter to analyze
+                )
 
-                # slice the data at which that param is used in correlation with the parent variable and get sliced calls from the function to update sliced_calls_to_analyze
-                for param_name, arg_num in param_map.items():
-                    if param_name.var in [var.variable for var in propagated_vars]:
-                        arg_pos = arg_num[1]
-                        analyzed_key = (param_name, arg_num[1], call_name, loc_addr)
-                        func_obj = addr_to_func(self, func_addr)
+                # Check the parameters of the function call
+                for param_name, arg_info in param_map.items():
+                    arg_pos = arg_info[
+                        1
+                    ]  # The position of the argument in the function
 
-                        for index, param in enumerate(func_obj.parameter_vars):
-                            index = index + 1
-                            if index == arg_pos:
-                                func_param_to_analyze = param
+                    # Ensure the parameter variable is among the propagated variables
+                    if param_name.var not in [v.variable for v in propagated_vars]:
+                        continue
 
-                        if analyzed_key in calls_analyzed:
-                            continue
+                    # If we've already analyzed this function call, skip it
+                    analyzed_key = (param_name, arg_pos, call_name, loc_addr)
+                    if analyzed_key in calls_analyzed:
+                        continue
+                    calls_analyzed.append(analyzed_key)
 
-                        else:
-                            calls_analyzed.append(analyzed_key)
+                    # Retrieve the function object and find the relevant parameter
+                    func_obj = addr_to_func(self.bv, func_addr)
+                    for index, param in enumerate(func_obj.parameter_vars, 1):
+                        if index == arg_pos:
+                            func_param_to_analyze = param
+                            break
 
-                        if slice_type == SliceType.Forward:
-                            new_slice_data, func_name, propagated_vars = (
-                                self.tainted_forward_slice(
-                                    target=TaintTarget(
-                                        func_addr, func_param_to_analyze
-                                    ),
-                                    var_type=SlicingID.FunctionParam,
-                                )
-                            )
+                    # Skip if no valid parameter to analyze
+                    if not func_param_to_analyze:
+                        continue
 
-                        elif slice_type == SliceType.Backward:
-                            new_slice_data, func_name, propagated_vars = (
-                                self.tainted_backwards_slice(
-                                    target=TaintTarget(
-                                        func_addr, func_param_to_analyze
-                                    ),
-                                    var_type=SlicingID.FunctionParam,
-                                )
-                            )
-
-                        new_sliced_calls = self.get_sliced_calls(
-                            new_slice_data, call_name, propagated_vars
+                    # Slice the function call and get new propagated variables
+                    try:
+                        new_slice_data, func_name, propagated_vars = self.tainted_slice(
+                            target=TaintTarget(func_addr, func_param_to_analyze),
+                            var_type=SlicingID.FunctionParam,
+                            slice_type=slice_type,
                         )
 
-                        if (
-                            func_name,
-                            func_param_to_analyze,
-                        ) not in propagation_cache.keys() or (
-                            func_name,
-                            func_param_to_analyze.name,
-                        ) not in propagation_cache.keys():
-                            propagation_cache[(func_name, func_param_to_analyze)] = (
-                                new_slice_data,
-                                propagated_vars,
-                            )
+                    # Skip if slicing fails for this function call
+                    except Exception:
+                        continue
 
-                        if new_sliced_calls != None:
-                            call_count += len(new_sliced_calls)
-                            new_calls.update(new_sliced_calls)
+                    # Store the new slice data and propagate variables in the cache
+                    new_key = (func_name, func_param_to_analyze)
+                    if new_key not in propagation_cache:
+                        propagation_cache[new_key] = (new_slice_data, propagated_vars)
+                        call_flow.append(new_key)
 
-            call_count -= 1
-            sliced_calls_to_analyze.update(new_calls)
+                    # Get any new sliced calls from this function and add them to the analysis queue
+                    new_sliced_calls = self.get_sliced_calls(
+                        new_slice_data, func_name, propagated_vars
+                    )
+                    if new_sliced_calls:
+                        new_calls.update(new_sliced_calls)
 
-        match output:
-            case OutputMode.Returned:
-                if self.verbose:
-                    for key, (s_data, _) in propagation_cache.items():
-                        function_name, tainted_var = key
-                        if isinstance(tainted_var, str):
-                            print(
-                                f"Function name: {function_name} | Target Variable: {tainted_var} | Address | LOC | Target Variable | Propagated Variable\n{(Fore.LIGHTGREEN_EX+'='+Fore.RESET)*(91 + len(function_name) + len(tainted_var))}"
-                            )
-                        elif isinstance(tainted_var, Variable):
-                            print(
-                                f"\nFunction name: {function_name} | Target Variable: {tainted_var.name} | Address | LOC | Target Variable | Propagated Variable\n{(Fore.LIGHTGREEN_EX+'='+Fore.RESET)*(91 + len(function_name) + len(tainted_var.name))}"
-                            )
+            # Update the list of sliced calls to analyze for the next iteration
+            sliced_calls_to_analyze = new_calls
 
-                        for tainted_loc in s_data:
-                            print(tainted_loc)
+        # Output mode handling: return or print the results
+        if output == OutputMode.Printed:
+            for k in call_flow:
+                fn_name, var = k
+                print(
+                    f"Function: {fn_name} | Var: {var.name if hasattr(var, 'name') else var}"
+                )
+                for entry in propagation_cache[k][0]:
+                    print(entry)
 
-                return propagation_cache
-
-            case OutputMode.Printed:
-                for key, (s_data, _) in propagation_cache.items():
-                    if isinstance(tainted_var, str):
-                        print(
-                            f"\nFunction name: {function_name} | Target Variable: {tainted_var} | Address | LOC | Target Variable | Propagated Variable\n{(Fore.LIGHTGREEN_EX+'='+Fore.RESET)*(91 + len(function_name) + len(tainted_var))}"
-                        )
-                    elif isinstance(tainted_var, Variable):
-                        print(
-                            f"\nFunction name: {function_name} | Target Variable: {tainted_var.name} | Address | LOC | Target Variable | Propagated Variable\n{(Fore.LIGHTGREEN_EX+'='+Fore.RESET)*(91 + len(function_name) + len(tainted_var.name))}"
-                        )
-
-                    for tainted_loc in s_data:
-                        print(tainted_loc)
+        # Return the final ordered dictionary of function slices
+        return OrderedDict((k, propagation_cache[k]) for k in call_flow)
 
     def is_function_param_tainted(
         self,
@@ -637,8 +558,8 @@ class Analysis:
         origin_function: Function = None,
         original_tainted_params: Variable | str | list[Variable] = None,
         tainted_param_map: dict = None,
-        recursion_limit = 8,
-        sub_functions_analyzed = 0,
+        recursion_limit=8,
+        sub_functions_analyzed=0,
     ):
         """
         Determine if a function's parameter is tainted by tracking the tainted parameter's path and analyzing
@@ -689,7 +610,7 @@ class Analysis:
         # Convert function_node to a Function object if it's provided as an integer address
         if isinstance(function_node, int):
             addr = function_node
-            function_node = addr_to_func(self, function_node)
+            function_node = addr_to_func(self.bv, function_node)
             if function_node is None:
                 raise ValueError(
                     f"[{Fore.RED}ERROR{Fore.RESET}]Could not find target function from address @ {addr:#0x}"
@@ -818,7 +739,7 @@ class Analysis:
                             if isinstance(param, MediumLevelILVarSsa)
                         ]
 
-                        call_object = addr_to_func(self, int(str(loc.dest), 16))
+                        call_object = addr_to_func(self.bv, int(str(loc.dest), 16))
 
                         if self.verbose:
                             print(
@@ -856,7 +777,8 @@ class Analysis:
                             tainted_sub_variables = [
                                 param[0].ssa_form.var
                                 for param in zipped_params
-                                if param[1].name in interproc_results.tainted_param_names
+                                if param[1].name
+                                in interproc_results.tainted_param_names
                             ]
 
                             for sub_var in tainted_sub_variables:
@@ -879,7 +801,12 @@ class Analysis:
                                     )
 
                     case _:
-                        print("we hit an unaccounted for case", loc.operation.name, hex(loc.address), loc)
+                        print(
+                            "[is_function_param_tainted (WIP)] Unaccounted for operation",
+                            loc.operation.name,
+                            hex(loc.address),
+                            loc,
+                        )
 
                 # Map variables written to the variables read in the current instruction
                 for var_assignment in loc.vars_written:
@@ -910,8 +837,10 @@ class Analysis:
         )
 
         if len(tainted_parameters) > 1:
-            tainted_param_map[list(tainted_parameters)[0]] = list(set(tainted_parameters))[1:]
-        
+            tainted_param_map[list(tainted_parameters)[0]] = list(
+                set(tainted_parameters)
+            )[1:]
+
         # Find out if return variable is tainted
         ret_variable_tainted = False
 
@@ -939,7 +868,6 @@ class Analysis:
             is_return_tainted=ret_variable_tainted,
             tainted_param_map=tainted_param_map,
         )
-
 
     def is_function_imported(self, instr_mlil: MediumLevelILInstruction) -> bool:
         if instr_mlil.operation != MediumLevelILOperation.MLIL_CALL:
