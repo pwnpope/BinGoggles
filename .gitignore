@@ -15,5 +15,5 @@ output.prof
 pytest.ini
 tasking.md
 bingoggles/graph_builder.py
-docs
-build
+docs/*
+build/*
