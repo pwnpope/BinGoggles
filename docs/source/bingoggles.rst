@@ -6,13 +6,6 @@ BinGoggles
 The primary location for this documentation is at https://docs.bingoggles.com (powered by Read the Docs).  
 It is maintained in three primary channels:
 
-- Stable_  
-- Beta_  
-- Dev_  
-
-.. _Stable: https://docs.bingoggles.com/en/stable  
-.. _Beta:   https://docs.bingoggles.com/en/beta  
-.. _Dev:    https://docs.bingoggles.com/en/dev  
 
 Getting Started
 ---------------
