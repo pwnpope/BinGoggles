@@ -3,9 +3,6 @@ BinGoggles
 
 ``BinGoggles`` is a binary-analysis and vulnerability-research framework designed for rapid development of data-flow analyses tooling. Written in Python, it provides a modular architecture to plug in custom scanners, graph builders, and vulnerability detectors.
 
-The primary location for this documentation is at https://docs.bingoggles.com (powered by Read the Docs).  
-It is maintained in three primary channels:
-
 
 Getting Started
 ---------------
