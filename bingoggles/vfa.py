@@ -119,12 +119,15 @@ class Analysis:
         sliced_func = {}
         propagated_vars = []
 
-        instr_mlil = func_obj.get_llil_at(target.loc_address).mlil
-        if instr_mlil is None:
-            print(
-                f"[{Fore.RED}Error{Fore.RESET}] Could not find MLIL instruction at address: {target.loc_address}"
-            )
-            return None
+        instr_mlil = None
+        if var_type != SlicingID.FunctionParam:
+            instr_mlil = func_obj.get_llil_at(target.loc_address).mlil
+
+            if instr_mlil is None:
+                print(
+                    f"[{Fore.RED}Error{Fore.RESET}] Could not find MLIL instruction at address: {target.loc_address}"
+                )
+                return None
 
         # Start by tracing the initial target variable
         match var_type:
@@ -404,7 +407,7 @@ class Analysis:
         self,
         target: TaintTarget,
         var_type: SlicingID,
-        slice_type: SliceType,
+        slice_type: SliceType = SliceType.Forward,
         output: OutputMode = OutputMode.Returned,
         analyze_imported_functions=False,
     ) -> dict:
@@ -511,16 +514,11 @@ class Analysis:
                         continue
 
                     # Slice the function call and get new propagated variables
-                    try:
-                        new_slice_data, func_name, propagated_vars = self.tainted_slice(
-                            target=TaintTarget(func_addr, func_param_to_analyze),
-                            var_type=SlicingID.FunctionParam,
-                            slice_type=slice_type,
-                        )
-
-                    # Skip if slicing fails for this function call
-                    except Exception:
-                        continue
+                    new_slice_data, func_name, propagated_vars = self.tainted_slice(
+                        target=TaintTarget(func_addr, func_param_to_analyze),
+                        var_type=SlicingID.FunctionParam,
+                        slice_type=slice_type,
+                    )
 
                     # Store the new slice data and propagate variables in the cache
                     new_key = (func_name, func_param_to_analyze)
@@ -730,6 +728,17 @@ class Analysis:
                                 )
                             )
 
+                    # Handle SSA load operation by wrapping the source variable in TaintedVar
+                    case int(MediumLevelILOperation.MLIL_SET_VAR_SSA):
+                        for var in loc.vars_written:
+                            tainted_variables.add(
+                                TaintedVar(
+                                    var,
+                                    TaintConfidence.Tainted,
+                                    loc.address,
+                                )
+                            )
+
                     # Check if the instruction is a function call in SSA form
                     case int(MediumLevelILOperation.MLIL_CALL_SSA):
                         # Extract the parameters involved in the call
@@ -800,13 +809,23 @@ class Analysis:
                                         )
                                     )
 
-                    case _:
-                        print(
-                            "[is_function_param_tainted (WIP)] Unaccounted for operation",
-                            loc.operation.name,
-                            hex(loc.address),
-                            loc,
+                    case int(MediumLevelILOperation.MLIL_SET_VAR_SSA_FIELD):
+                        tainted_variables.add(
+                            TaintedVar(loc.dest, TaintConfidence.Tainted, loc.address)
                         )
+
+                    case _:
+                        if loc.operation not in [
+                            int(MediumLevelILOperation.MLIL_RET),
+                            int(MediumLevelILOperation.MLIL_GOTO),
+                            int(MediumLevelILOperation.MLIL_IF),
+                        ]:
+                            print(
+                                "[is_function_param_tainted (WIP)] Unaccounted for operation",
+                                loc.operation.name,
+                                hex(loc.address),
+                                loc,
+                            )
 
                 # Map variables written to the variables read in the current instruction
                 for var_assignment in loc.vars_written:
