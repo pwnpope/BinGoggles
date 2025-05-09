@@ -632,14 +632,20 @@ def trace_tainted_variable(
                     ):
                         if isinstance(instr_mlil.src, MediumLevelILLoad):
                             try:
-                                address_variable, offset_variable = instr_mlil.src.vars_read
+                                address_variable, offset_variable = (
+                                    instr_mlil.src.vars_read
+                                )
 
                             except ValueError:
                                 address_variable = instr_mlil.src.vars_read[0]
                                 offset_variable = None
 
                             except Exception as e:
-                                print("[LOC (unhandled)]: ", instr_mlil, hex(instr_mlil.address))
+                                print(
+                                    "[LOC (unhandled)]: ",
+                                    instr_mlil,
+                                    hex(instr_mlil.address),
+                                )
                                 print("[Error]: ", e)
                                 continue
 
@@ -770,9 +776,14 @@ def trace_tainted_variable(
                     )
 
                 case _:
-                    print(
-                        f"[INFO] we hit an un-accounted for case, here are some details\n[MLIL Operation] {instr_mlil.operation.name}\n[LOC]: {instr_mlil}\n [Address] {instr_mlil.address:#0x}\n\n"
-                    )
+                    if instr_mlil.operation not in [
+                        int(MediumLevelILOperation.MLIL_RET),
+                        int(MediumLevelILOperation.MLIL_GOTO),
+                        int(MediumLevelILOperation.MLIL_IF),
+                    ]:
+                        print(
+                            f"[INFO] we hit an un-accounted for case, here are some details\n[MLIL Operation] {instr_mlil.operation.name}\n[LOC]: {instr_mlil}\n [Address] {instr_mlil.address:#0x}\n\n"
+                        )
                     # Collect vars written
                     if instr_mlil.vars_written:
                         for variable_written_to in instr_mlil.vars_written:
