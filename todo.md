@@ -4,7 +4,7 @@
 - [x] Finalize the README
 - [ ] Review and enhance all docstrings
 - [ ] Auto-generate documentation from docstrings (consider GitHub Pages)
-- [ ] Document test cases in test/test_auxiliary.py
+- [ ] Document test cases in test/test_cases.py
 - [x] Publish on GitHub
 
 ## 🧪 Testing & Validation
