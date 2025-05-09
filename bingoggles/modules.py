@@ -1,13 +1,10 @@
-from bingoggles_types import *
 from binaryninja.enums import MediumLevelILOperation
 from binaryninja.mediumlevelil import MediumLevelILVar
+from binaryninja.enums import MediumLevelILOperation
+from binaryninja.mediumlevelil import MediumLevelILVar
+
 from bingoggles.auxiliary import func_name_to_object
-
-
-from bingoggles_types import *
-from binaryninja.enums import MediumLevelILOperation
-from binaryninja.mediumlevelil import MediumLevelILVar
-
+from bingoggles.bingoggles_types import *
 
 class UseAfterFreeDetection:
     def __init__(self, bv, slice_data: dict):
