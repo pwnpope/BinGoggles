@@ -564,11 +564,8 @@ class Analysis:
         whether it influences other parameter paths.
 
         Args:
-            function_node (int | Function): The target function, specified either by its starting address (int)
-                                                or as a Binary Ninja Function object.
-            tainted_params (Variable | str | list[Variable]): The parameter(s) to check for taint. This can be a single
-                                                            Variable object, a string representing the parameter name,
-                                                            or a list of Variable objects.
+            function_node (int | Function): The target function, specified either by its starting address (int) or as a Binary Ninja Function object.
+            tainted_params (Variable | str | list[Variable]): The parameter(s) to check for taint. This can be a single Variable object, a string representing the parameter name, or a list of Variable objects.
             origin_function (Function): This parameter is used for internal tracking and paremeter matching (do not touch this parameter).
             tainted_param_map (dict): A dictionary mapping original parameters to their tainted parameters.
 
