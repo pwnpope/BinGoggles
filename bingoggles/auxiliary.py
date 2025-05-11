@@ -12,7 +12,6 @@ from typing import Sequence, Dict, Tuple, Optional, Union
 from .bingoggles_types import *
 from binaryninja.enums import MediumLevelILOperation, SymbolType
 from binaryninja import BinaryView, Symbol
-from .vfa import Analysis
 
 
 def flat(
@@ -30,15 +29,13 @@ def flat(
     - Append any other non-list operands as-is.
 
     Args:
-        ops: A sequence of operands which may include nested lists, arbitrary objects,
-             or `HighLevelILInstruction` instances.
+        ops (Sequence[Union[HighLevelILInstruction, MediumLevelILInstruction]]): A sequence of operands which may include nested lists, arbitrary objects, or `HighLevelILInstruction` instances.
 
     Returns:
         A flat list where:
         - Nested lists from the original `ops` are expanded one level deep (recursively).
         - All `HighLevelILInstruction` objects are included.
-        - Any direct child `HighLevelILInstruction` operands of those instructions
-          are also included.
+        - Any direct child `HighLevelILInstruction` operands of those instructions are also included.
         - All other operands are carried through unchanged.
     """
     flat_list = []
@@ -62,8 +59,8 @@ def get_symbol_from_const_ptr(
     Resolve a const-pointer operand back to its data symbol.
 
     Args:
-        bv:        The BinaryView containing your symbols.
-        const_ptr: An MLIL ConstPtr whose .value is the address of some data.
+        bv (BinaryView):        The BinaryView containing your symbols.
+        const_ptr (MediumLevelILConstPtr): An MLIL ConstPtr whose .value is the address of some data.
 
     Returns:
         The matching Symbol of type DataSymbol, or None if not found.
@@ -171,11 +168,12 @@ def param_var_map(
     return param_info
 
 
-def addr_to_func(bv, address: int) -> Function | None:
+def addr_to_func(bv: BinaryView, address: int) -> Function | None:
     """
     `addr_to_func` Get the function object from an address
 
     Args:
+        bv: (BinaryView): Binary Ninja BinaryView
         address (int): address to the start or within the function object
 
     Returns:
@@ -189,17 +187,18 @@ def addr_to_func(bv, address: int) -> Function | None:
         return None
 
 
-def func_name_to_object(analysis, func_name: str) -> int | None:
+def func_name_to_object(bv: BinaryView, func_name: str) -> int | None:
     """
     `func_name_to_object` Get a function address from a name
 
     Args:
         func_name (str): function name
+        bv (BinaryView): Binary Ninja BinaryView
 
     Returns:
         Binary ninja function object
     """
-    for func in analysis.bv.functions:
+    for func in bv.functions:
         if func.name == func_name:
             return func
     else:
@@ -288,7 +287,7 @@ def get_struct_field_name(loc: MediumLevelILInstruction):
 
 
 def get_mlil_glob_refs(
-    analysis: Analysis, function_object: Function, var_to_trace: TaintedGlobal
+    analysis, function_object: Function, var_to_trace: TaintedGlobal
 ) -> list:
     """
     Finds all MLIL instructions that reference a given global variable.

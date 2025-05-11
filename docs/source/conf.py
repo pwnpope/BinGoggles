@@ -8,14 +8,13 @@
 import os
 import sys
 import sphinx_rtd_theme
-import sphinx_rtd_dark_mode  # ← Dark-mode extension
 
 sys.path.insert(0, os.path.abspath("../../"))
 
 project   = 'BinGoggles'
 copyright = '2025, pwnpope'
 author    = 'pwnpope'
-release   = '0.0.2'
+release   = '0.0.3'
 
 # -- General configuration ---------------------------------------------------
 
@@ -27,7 +26,6 @@ extensions = [
     'sphinx.ext.todo',            # TODO directives
     'sphinx.ext.autosummary',     # Generate summary tables
     'sphinx_rtd_theme',           # Read-the-Docs base theme
-    'sphinx_rtd_dark_mode',       # Dark-mode switcher
 ]
 
 autosummary_generate = True
@@ -63,11 +61,9 @@ html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
 html_theme_options = {
     # RTD defaults
     'collapse_navigation': False,
-    'display_version':      True,
-    'navigation_depth':     4,
-
-    # Dark-mode specific (sphinx_rtd_dark_mode)
-    'style_nav_header_background': '#2980B9',
+    'display_version': True,
+    'navigation_depth': 4,
+    'display_version': True,
 }
 
 # sphinx-rtd-dark-mode configuration

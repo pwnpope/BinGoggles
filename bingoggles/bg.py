@@ -476,24 +476,18 @@ class Analysis:
             target (TaintTarget): The initial source of taint, defined by an address and variable.
             var_type (SlicingID): The type of variable to slice from (FunctionVar, FunctionParam, etc.).
             slice_type (SliceType, optional): The direction of the slice (Forward or Backward).
-                Defaults to SliceType.Forward.
-            output (OutputMode, optional): Whether to print results or return them.
-                Defaults to OutputMode.Returned.
-            analyze_imported_functions (bool, optional): Whether to trace into imported (external) functions.
-                Defaults to False.
+            output (OutputMode, optional): Whether to print results or return them. Defaults to OutputMode.Returned.
+            analyze_imported_functions (bool, optional): Whether to trace into imported (external) functions. Defaults to False.
 
         Returns:
-            dict: An ordered dictionary mapping each function slice as:
+            dict: A dictionary mapping each function and target variable to its taint slice:
+
                 {
                     (function_name, variable): (
-                        List[TaintedLOC],            # Slice instructions
-                        List[TaintedVar]             # Variables tainted in this slice
+                        List[TaintedLOC],    # Slice instructions
+                        List[TaintedVar]     # Variables tainted in this slice
                     ),
-                    ...
                 }
-
-        Raises:
-            TypeError: If the starting function cannot be resolved from the provided target address.
         """
         # Initialization of necessary data structures
         propagation_cache = {}  # To store the slice data and propagated variables
@@ -516,7 +510,7 @@ class Analysis:
             )
 
         # Fetch the parent function object for variable reference
-        parent_func_obj = func_name_to_object(self, og_func_name)
+        parent_func_obj = func_name_to_object(self.bv, og_func_name)
         key = (og_func_name, str_to_var_object(target.variable, parent_func_obj))
 
         # Store the initial slice data into the cache and track the call flow
@@ -899,6 +893,7 @@ class Analysis:
                             int(MediumLevelILOperation.MLIL_RET),
                             int(MediumLevelILOperation.MLIL_GOTO),
                             int(MediumLevelILOperation.MLIL_IF),
+                            int(MediumLevelILOperation.MLIL_NORET),
                         ]:
                             print(
                                 "[is_function_param_tainted (WIP)] Unaccounted for operation",

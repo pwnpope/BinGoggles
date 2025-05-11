@@ -40,8 +40,12 @@ Using BinGoggles with `Hugsy Headless <https://github.com/hugsy/binja-headless>`
 
 .. toctree::
    :maxdepth: 2
+   :caption: Modules
 
-   bingoggles
+   bingoggles.auxiliary
+   bingoggles.bingoggles_types
+   bingoggles.modules
+   bingoggles.vfa
 
 
 

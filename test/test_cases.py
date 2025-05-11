@@ -1,7 +1,7 @@
 from os.path import abspath
 from pprint import pprint
 
-from bingoggles.vfa import Analysis
+from bingoggles.bg import Analysis
 from bingoggles.bingoggles_types import *
 from bingoggles.modules import *
 from bingoggles.graph_builder import build_dataflow_graph
@@ -638,7 +638,7 @@ def test_vfg(bg_init, test_bin="./test/binaries/bin/test_struct_member"):
     # Trace forward from `ptr` in myStruct
     locs, _, tainted_vars = aux.tainted_slice(
         target=TaintTarget(0x00401231, "ptr"),
-        var_type=SlicingID.FunctionVar,
+        var_type=SlicingID.StructMember,
     )
 
     # Build dataflow graph

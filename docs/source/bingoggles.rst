@@ -8,13 +8,14 @@ Getting Started
 ---------------
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
    :glob:
 
-   about
-   install
-   intro
-   quickstart
+   .. bingoggles.auxiliary
+   .. bingoggles.bingoggles_types
+   .. bingoggles.modules
+   .. bingoggles.vfa
+
 
 Module Reference
 ----------------
@@ -24,15 +25,6 @@ Each of the core ``bingoggles`` modules is documented below.
 .. toctree::
    :maxdepth: 1
    :glob:
-
-   bingoggles.auxiliary
-   bingoggles.bingoggles_types
-   bingoggles.modules
-   bingoggles.vfa
-   bingoggles.graph_builder
-
-Submodules
-----------
 
 bingoggles.auxiliary module
 ---------------------------
@@ -62,14 +54,6 @@ bingoggles.vfa module
 ---------------------
 
 .. automodule:: bingoggles.vfa
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-bingoggles.graph_builder module
---------------------------------
-
-.. automodule:: bingoggles.graph_builder
    :members:
    :undoc-members:
    :show-inheritance:

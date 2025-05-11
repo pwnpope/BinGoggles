@@ -2,7 +2,6 @@ from binaryninja.enums import MediumLevelILOperation
 from binaryninja.mediumlevelil import MediumLevelILVar
 from binaryninja.enums import MediumLevelILOperation
 from binaryninja.mediumlevelil import MediumLevelILVar
-
 from bingoggles.auxiliary import func_name_to_object
 from bingoggles.bingoggles_types import *
 
@@ -336,8 +335,8 @@ class UseAfterFreeDetection:
                             ):
                                 return False
 
-                            if alloc_func and int(size.value) == int(
-                                alloc_func.loc.params[0].value
+                            if alloc_func and int(size) == int(
+                                alloc_func.loc.params[0]
                             ):
                                 return True
 
@@ -471,7 +470,7 @@ class UseAfterFreeDetection:
 
         Returns:
             bool: True if `realloc` is acting as a deallocation (i.e., size is 0 or tainted),
-                  False if it’s acting as a normal reallocation.
+                  False if it's acting as a normal reallocation.
 
         Notes:
             - Used to distinguish whether `realloc` should be treated like `free`.
@@ -486,7 +485,7 @@ class UseAfterFreeDetection:
                 return True
             elif (
                 int(size.operation) == int(MediumLevelILOperation.MLIL_CONST)
-                and int(size.value) == 0
+                and int(size) == 0
             ):
                 return True
 
