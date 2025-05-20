@@ -3,7 +3,6 @@ from binaryninja.mediumlevelil import MediumLevelILVar, MediumLevelILConst
 from binaryninja import BinaryView
 from bingoggles.auxiliary import func_name_to_object
 from bingoggles.bingoggles_types import *
-from bingoggles.bg import Analysis
 from typing import Union
 
 

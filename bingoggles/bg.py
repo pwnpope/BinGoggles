@@ -45,7 +45,7 @@ class Analysis:
                 Performs forward or backward taint slicing on the specified variable within its function.
 
             complete_slice(target, var_type, slice_type, output, analyze_imported_functions) -> dict:
-                Traces taint propagation across functions, forming a complete variable flow graph.
+                Traces taint propagation across functions, forming a complete variable flow graph-like structure.
 
             is_function_param_tainted(function_node, tainted_params, ...) -> InterprocTaintResult:
                 Recursively determines whether a function's parameters or return value become tainted.
@@ -538,17 +538,17 @@ class Analysis:
                     param_name = getattr(param_var, "var", param_var).name
                     propagated_names = {getattr(v.variable, "var", v.variable).name for v in propagated_vars}
                     callee_func = addr_to_func(self.bv, callee_addr)
+                    try:
+                        callee_param = callee_func.parameter_vars[arg_pos - 1]
+                    except IndexError:
+                        continue
+
                     recurse_key = (callee_func.name, callee_param)
                     
                     if param_name not in propagated_names:
                         continue
 
                     if not callee_func:
-                        continue
-
-                    try:
-                        callee_param = callee_func.parameter_vars[arg_pos - 1]
-                    except IndexError:
                         continue
 
                     if recurse_key in visited:
