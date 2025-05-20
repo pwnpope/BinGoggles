@@ -5,6 +5,7 @@ from binaryninja.mediumlevelil import (
     MediumLevelILLoad,
     MediumLevelILConstPtr,
     MediumLevelILVar,
+    MediumLevelILConst
 )
 from binaryninja.highlevelil import HighLevelILOperation, HighLevelILInstruction
 from colorama import Fore
@@ -262,9 +263,7 @@ def get_struct_field_name(loc: MediumLevelILInstruction):
     Extract the struct field name token from an MLIL instruction.
 
     This helper inspects the instruction's operation and returns the token
-    corresponding to the struct member's name. It currently handles two cases:
-      - `MLIL_SET_VAR`: returns the 5th token (index 4)
-      - `MLIL_STORE_STRUCT`: returns the 3rd token (index 2)
+    corresponding to the struct member's name.
 
     Args:
         loc (MediumLevelILInstruction): The MLIL instruction that performs a struct
@@ -273,17 +272,14 @@ def get_struct_field_name(loc: MediumLevelILInstruction):
     Returns:
         str: The name of the struct field referenced in the instruction tokens.
     """
-    #:TODO this will not work in production, beacuse we need to account for nested structs, etc etc, this should be more robust
     if loc.operation == int(MediumLevelILOperation.MLIL_SET_VAR):
-        return loc.tokens[4]
+        return loc.tokens[-1].text
 
     elif loc.operation == int(MediumLevelILOperation.MLIL_STORE_STRUCT):
-        return loc.tokens[2]
+        field_name_index = next((i for i, t in enumerate(loc.tokens) if t.text == " = "), None)
+        return loc.tokens[field_name_index - 1].text
 
-    else:
-        raise ValueError(
-            f"[Error] Could not find struct member name\n[LOC (unhandled)]: {loc}"
-        )
+    raise ValueError(f"[Error] Could not find struct member name in LOC: {loc}")
 
 
 def get_mlil_glob_refs(
@@ -440,6 +436,9 @@ def trace_tainted_variable(
 
         elif isinstance(v, TaintedStructMember):
             return str(v.member)
+        
+        elif isinstance(v, TaintedAddressOfField):
+            return v.name
 
         else:
             return v.variable.name
@@ -557,24 +556,45 @@ def trace_tainted_variable(
                     offset = None
 
                     if len(instr_mlil.dest.operands) == 1:
-                        address_variable = instr_mlil.dest.operands[0]
+                        addr_var = instr_mlil.dest.operands[0]
 
                     elif len(instr_mlil.dest.operands) == 2:
                         address_variable, offset_variable = instr_mlil.dest.operands
-                        addr_var, offset = address_variable.operands
+                        if isinstance(offset_variable, MediumLevelILConst):
+                            addr_var, offset = instr_mlil.dest.operands
+                            offset_variable = None
+                        else:
+                            addr_var, offset = address_variable.operands
 
-                        offset_var_taintedvar = [
-                            var.variable
-                            for var in already_iterated
-                            if var.variable == offset_variable
-                        ]
+                        if offset_variable:
+                            offset_var_taintedvar = [
+                                var.variable
+                                for var in already_iterated
+                                if var.variable == offset_variable
+                            ]
 
                     if offset_var_taintedvar:
                         vars_found.append(
                             TaintedAddressOfField(
-                                variable=addr_var or address_variable,
+                                variable=addr_var,
                                 offset=offset,
                                 offset_var=offset_var_taintedvar,
+                                confidence_level=TaintConfidence.Tainted,
+                                loc_address=instr_mlil.address,
+                                targ_function=function_object,
+                            )
+                        )
+
+                    elif offset_variable:
+                        vars_found.append(
+                            TaintedAddressOfField(
+                                variable=addr_var,
+                                offset=offset,
+                                offset_var=TaintedVar(
+                                    variable=offset_variable,
+                                    confidence_level=TaintConfidence.NotTainted,
+                                    loc_address=instr_mlil.address,
+                                ),
                                 confidence_level=TaintConfidence.Tainted,
                                 loc_address=instr_mlil.address,
                                 targ_function=function_object,
@@ -584,13 +604,9 @@ def trace_tainted_variable(
                     else:
                         vars_found.append(
                             TaintedAddressOfField(
-                                variable=addr_var or address_variable,
+                                variable=addr_var if isinstance(addr_var, Variable) else addr_var.var,
                                 offset=offset,
-                                offset_var=TaintedVar(
-                                    variable=offset_variable,
-                                    confidence_level=TaintConfidence.NotTainted,
-                                    loc_address=instr_mlil.address,
-                                ),
+                                offset_var=None,
                                 confidence_level=TaintConfidence.Tainted,
                                 loc_address=instr_mlil.address,
                                 targ_function=function_object,
