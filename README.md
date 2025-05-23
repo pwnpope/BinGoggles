@@ -1,4 +1,4 @@
-# `Bingoggles` The Assumed Taint Analysis Engine
+# BinGoggles The Assumed Taint Analysis Engine
 
 ![](images/bingoggles.jpeg)
 
