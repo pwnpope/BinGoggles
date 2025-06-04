@@ -13,6 +13,5 @@ bg_cache
 changelog.md
 output.prof
 pytest.ini
-tasking.md
 docs/*
 build/*

@@ -12,7 +12,8 @@ A **complete slice** traces a tainted variable's full journey through function c
 ## How is BinGoggles Unique?
 - [x] **Platform agnostic** – Runs on Linux, macOS, and Windows
 - [x] **Intraprocedural and interprocedural analysis** – Track variable flow within and across functions
-- [x] **Library agnostic (mostly)** – User defines any external libraries for deeper analysis
+- [ ] **Library agnostic (mostly)** – User defines any external libraries for deeper analysis
+    - work in progress
 - [x] **Architecture/language agnostic (mostly)** – Works with any binary that loads into Binary Ninja
 - [x] **Supports all variable types** – Local variables, struct members, globals, and function parameters
 - [x] **Easy-to-use API** – Designed for extensibility with plenty of usage examples
