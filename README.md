@@ -1,24 +1,25 @@
-# BinGoggles The Assumed Taint Analysis Engine
+# BinGoggles: The Assumed Taint Analysis Engine
 
-![](images/bingoggles.jpeg)
+<img src="images/bingoggles.jpeg" alt="BinGoggles" width="700"/>
 
-- Variables are the key to storing data in programs, that's why when we do perform any kind of analysis as a vulnerability researcher we usually track what variables contain user input and start from there, my library will help with preforming analysis on these variables by providing through propagation analysis.
+BinGoggles is a static taint analysis framework for Binary Ninja. It tracks variable flow both *within* and *across* functions supporting full inter/intraprocedural slicing, including globals, structs, and function parameters.
 
-- In the development of my library I coined the term "complete slice" which means we're tainting the variable and tracking its usage throughout the entire program. What does this mean? This means that if data from a complete slice ends up in a sub-function call within the parent function we'll do analysis on that variable path as well.
-    - In short we're gathering the full path of a variable.
+Want to write your own analysis? Start with `bingoggles/modules.py` it shows how UAF detection was built using the core engine.
 
-## How is BinGoggles unique?
-- Platform agnostic, working on linux, mac, and windows ✅ 
-- Intraprocedural and interprocedural analysis ✅
-- Library agnostic (kinda) ✅
-    - User supplies what libraries if any the target program is using.
-- Architecture and language agnostic (kinda) ✅
-    - As long as the target program loads into binja.
-- Works on all types of variables from `normal variables` to `struct members`, `globals`, and `function parameters` ✅
-- Easy API with plenty of examples ✅
-- Both backwards and forwards taint analysis ✅
-- Great for embedded targets ✅
-- Both hugsy headless and binja headless support ✅
+### What is a "Complete Slice"?
+A **complete slice** traces a tainted variable's full journey through function calls, across boundaries, and deep into control/data paths. It's end-to-end propagation, made simple.
+
+## How is BinGoggles Unique?
+- [x] **Platform agnostic** – Runs on Linux, macOS, and Windows
+- [x] **Intraprocedural and interprocedural analysis** – Track variable flow within and across functions
+- [ ] **Library agnostic (mostly)** – User defines any external libraries for deeper analysis
+    - work in progress
+- [x] **Architecture/language agnostic (mostly)** – Works with any binary that loads into Binary Ninja
+- [x] **Supports all variable types** – Local variables, struct members, globals, and function parameters
+- [x] **Easy-to-use API** – Designed for extensibility with plenty of usage examples
+- [x] **Bidirectional taint analysis** – Supports both forward and backward slicing
+- [x] **Embedded-friendly** – Well-suited for firmware and embedded target analysis
+- [x] **Headless compatible** – Supports both Hugsy’s and Binary Ninja’s headless modes
 
 ## Install
 #### A) Setup python virtual environment
@@ -82,6 +83,6 @@ xdg-open docs/build/html/index.html
 
 - **Join the discussion**: Have questions or ideas? Drop a comment in issues or join our community channels to share your thoughts.
 
-- **Spread the word** — tweet about your favorite feature, share in Slack/Discord channels, or write a blog post.
+- **Spread the word** — Tweet about your favorite feature, share in Slack/Discord channels, or write a blog post.
 
 Thank you for helping make BinGoggles better!

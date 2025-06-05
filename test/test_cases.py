@@ -1,10 +1,9 @@
 from os.path import abspath
 from pprint import pprint
 
-from bingoggles.vfa import Analysis
+from bingoggles.bg import Analysis
 from bingoggles.bingoggles_types import *
 from bingoggles.modules import *
-from bingoggles.graph_builder import build_dataflow_graph
 
 
 def test_backwards_slice_var(bg_init, test_bin="./test/binaries/bin/test_mlil_store"):
@@ -241,7 +240,7 @@ def test_complete_fwd_slice_var(bg_init, test_bin="./test/binaries/bin/test_uaf"
                     f"Function '{fn}' is missing expected instruction index {expected_index}. "
                     f"Found instruction indexes: {instr_indexes}"
                 )
-
+    
 
 def test_complete_fwd_slice_param(
     bg_init, test_bin="./test/binaries/bin/test_is_param_tainted"
@@ -623,45 +622,3 @@ def test_set_var_field(bg_init, test_bin="./test/binaries/bin/test_struct_member
     sink_instrs = {13, 18, 22, 24}
     for idx in sink_instrs:
         assert idx in instr_indexes, f"Taint did not reach sink at instruction {idx}"
-
-
-def test_vfg(bg_init, test_bin="./test/binaries/bin/test_struct_member"):
-    bg = bg_init(
-        target_bin=abspath(test_bin),
-        libraries=["/lib/x86_64-linux-gnu/libc.so.6"],
-        host="127.0.0.1",
-        port=18812,
-    )
-    bv, libraries_mapped = bg.init()
-    aux = Analysis(binaryview=bv, verbose=False, libraries_mapped=libraries_mapped)
-
-    # Trace forward from `ptr` in myStruct
-    locs, _, tainted_vars = aux.tainted_slice(
-        target=TaintTarget(0x00401231, "ptr"),
-        var_type=SlicingID.FunctionVar,
-    )
-
-    # Build dataflow graph
-    dfg = build_dataflow_graph(locs)
-    # Assert we collected taint propagation
-    assert len(locs) > 5, f"Expected more than 5 tainted locations, got {len(locs)}"
-    assert (
-        len(tainted_vars) > 5
-    ), f"Expected more than 5 tainted vars, got {len(tainted_vars)}"
-    assert len(dfg.edges) > 0, "Expected at least one edge in the dataflow graph"
-
-    # Assert key propagation happened
-    node_labels = [str(getattr(n.variable, "member", n.variable)) for n in dfg.nodes]
-
-    assert any("valueCopy" in v for v in node_labels), "valueCopy taint not propagated"
-    assert any("dblPtr" in v for v in node_labels), "dblPtr taint not propagated"
-
-    print("\n=== DataflowGraph Nodes ===")
-    pprint(sorted(dfg.nodes, key=lambda n: n.addr))
-
-    print("\n=== DataflowGraph Edges ===")
-    pprint(sorted(dfg.edges, key=lambda e: (e.source.addr, e.target.addr)))
-
-    print(
-        "[PASS] test_vfg: dataflow graph constructed with expected taint propagation."
-    )

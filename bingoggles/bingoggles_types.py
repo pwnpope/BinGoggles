@@ -18,13 +18,14 @@ from typing import List
 import binaryninja as binja
 
 
-class IL:
-    LLIL = 1
-    MLIL = 2
-    HLIL = 3
-
-
 class TaintConfidence:
+    """
+    Enum-like class representing the confidence level of whether a variable is tainted.
+
+    - Tainted (1.0): The variable is known to be tainted.
+    - MaybeTainted (0.5): The variable might be tainted.
+    - NotTainted (0.0): The variable is known to be clean.
+    """
     Tainted = 1.0
     MaybeTainted = 0.5
     NotTainted = 0.0
@@ -32,6 +33,21 @@ class TaintConfidence:
 
 @dataclass
 class TaintedGlobal:
+    """
+    Represents a tainted global variable within the analysis.
+
+    This object tracks metadata related to global variables that are determined to be tainted
+    based on static analysis of MLIL operations. It includes the symbolic reference, the
+    confidence level of the taint, and contextual information like the location and pointer
+    expression used to reference the variable.
+
+    Attributes:
+        variable (str): The name of the global variable as a string.
+        confidence_level (TaintConfidence): How confidently this global is considered tainted.
+        loc_address (int): The address where the taint was observed.
+        const_ptr (MediumLevelILConstPtr): The IL constant pointer used to reference the global.
+        symbol_object (CoreSymbol): The Binary Ninja symbol representing the global variable.
+    """
     def __init__(
         self,
         variable: str,
@@ -127,11 +143,27 @@ class TaintedVar:
 
 
 class SliceType:
+    """
+    Enum for taint slicing direction.
+
+    Attributes:
+        Forward (int): Forward slicing (from source to sink).
+        Backward (int): Backward slicing (from sink to source).
+    """
     Forward = 0x0
     Backward = 0x1
 
 
 class SlicingID:
+    """
+    Enum for the kind of variable being sliced.
+
+    Attributes:
+        FunctionVar (int): A standard function-local variable.
+        FunctionParam (int): A formal function parameter.
+        GlobalVar (int): A global variable symbol.
+        StructMember (int): A member of a struct.
+    """
     FunctionVar = 0x10
     FunctionParam = 0x20
     GlobalVar = 0x30
@@ -139,6 +171,13 @@ class SlicingID:
 
 
 class OutputMode:
+    """
+    Enum for how to return or display taint analysis output.
+
+    Attributes:
+        Returned (int): Return the data programmatically.
+        Printed (int): Print the data to standard output.
+    """
     Returned = 0x0
     Printed = 0x1
 
@@ -164,6 +203,7 @@ class TaintedAddressOfField:
         self.loc_address = loc_address
         self.offset_var = offset_var
         self.function = targ_function
+        self.name = str(variable)
 
     def __eq__(self, other):
         if not isinstance(other, TaintedAddressOfField):
@@ -191,7 +231,9 @@ class TaintedAddressOfField:
 
     def __repr__(self):
         var_taint = self.confidence_level
-        offset_var_taint = self.offset_var.confidence_level
+        offset_var_taint = (
+            self.offset_var.confidence_level if self.offset_var else None
+        )
 
         if (
             var_taint == TaintConfidence.Tainted
@@ -211,7 +253,7 @@ class TaintedAddressOfField:
             and offset_var_taint == TaintConfidence.MaybeTainted
         ):
             taint_status = (
-                f"{Fore.LIGHTMAGENTA_EX}ReferenceVar + OffsetVar Tainted{Fore.RESET}"
+                f"{Fore.LIGHTMAGENTA_EX}ReferenceVar + OffsetVar Maybe Tainted{Fore.RESET}"
             )
         elif var_taint == TaintConfidence.MaybeTainted:
             taint_status = (
@@ -226,26 +268,26 @@ class TaintedAddressOfField:
             self.function.get_llil_at(self.loc_address).mlil.src, MediumLevelILLoad
         )
 
+        if self.offset_var is None:
+            # Case: simple var + constant offset
+            return (
+                f"[&{Fore.CYAN}{self.variable}{Fore.RESET} + {Fore.CYAN}{self.offset}{Fore.RESET}] -> "
+                f"[{taint_status}]"
+            )
+
         if is_load:
             return (
                 f"[&{Fore.CYAN}{self.variable}{Fore.RESET} + "
                 f"{Fore.CYAN}{self.offset_var.variable}{Fore.RESET}] -> "
                 f"[{taint_status}]"
             )
-
         else:
-            if self.offset_var and self.offset:
-                return (
-                    f"[&{Fore.CYAN}{self.variable}{Fore.RESET}:{Fore.CYAN}{self.offset}{Fore.RESET} + "
-                    f"{Fore.CYAN}{self.offset_var.variable}{Fore.RESET}] -> "
-                    f"[{taint_status}]"
-                )
+            return (
+                f"[&{Fore.CYAN}{self.variable}{Fore.RESET}:{Fore.CYAN}{self.offset}{Fore.RESET} + "
+                f"{Fore.CYAN}{self.offset_var.variable}{Fore.RESET}] -> "
+                f"[{taint_status}]"
+            )
 
-            else:
-                return (
-                    f"[{Fore.CYAN}{self.variable}{Fore.RESET}]{Fore.RESET} -> "
-                    f"[{taint_status}]"
-                )
 
 
 class BGInit:
@@ -462,6 +504,13 @@ class TaintedStructMember:
 
 @dataclass
 class TaintTarget:
+    """
+    Represents the initial location and variable to start taint analysis from.
+
+    Attributes:
+        loc_address (int): Address of the instruction referencing the variable.
+        variable (Variable | str): The variable to trace (either a Binja object or its name).
+    """
     def __init__(self, loc_address: int, variable: Variable | str):
         self.loc_address = loc_address
         self.variable = variable
@@ -513,9 +562,22 @@ class InterprocTaintResult:
 
 class TaintedLOC:
     """
-    This class represents each line of code that we gather during analysis and we sort it by the confidence of it being tainted.
-    """
+    Represents a single tainted instruction in the variable flow analysis.
 
+    This class holds the metadata for a specific line of code (MediumLevelILInstruction)
+    that has been identified as part of a tainted data flow path. It links the instruction
+    to the variable being tracked, the variable it may have propagated from, and the 
+    confidence level assigned to the taint at that point.
+
+    Attributes:
+        loc (MediumLevelILInstruction): The MLIL instruction involved in the tainted operation.
+        addr (int): The address of the instruction in the binary.
+        target_var (Union[TaintedVar, TaintedAddressOfField, TaintedGlobal, TaintedStructMember]):
+            The variable being tracked as tainted at this instruction.
+        propagated_var (Variable | None): The variable from which the taint originated, if applicable.
+        taint_confidence (TaintConfidence): The confidence level (Tainted, MaybeTainted, NotTainted).
+        function_object (Function): The Binary Ninja function object this instruction belongs to.
+    """
     def __init__(
         self,
         loc: MediumLevelILInstruction,  # Line of code
@@ -565,6 +627,13 @@ class TaintedLOC:
 
 @dataclass
 class VulnReport:
+    """
+    Encapsulates data about a detected vulnerability, specifically
+    the tainted execution path that leads to it.
+
+    Attributes:
+        vulnerable_path_data (List[TaintedLOC]): List of tainted code locations forming a vulnerable execution path.
+    """
     def __init__(self, vulnerable_path_data: List[TaintedLOC]):
         self.vulnerable_path_data = vulnerable_path_data
 
@@ -574,38 +643,3 @@ class VulnReport:
     def __repr__(self):
         return f"VulnReport(vulnerable_path_data={self.vulnerable_path_data})"
 
-
-@dataclass
-class DataflowGraph:
-    """
-    BinGoggles Dataflow Graph.
-    Represents variable-to-variable taint propagation within a function.
-    """
-
-    @dataclass(frozen=True)
-    class Node:
-        variable: (
-            TaintedVar | TaintedGlobal | TaintedStructMember | TaintedAddressOfField
-        )
-        addr: int
-
-        def __repr__(self):
-            return f"Node(var={self.variable}, addr={self.addr:#x})"
-
-    @dataclass(frozen=True)
-    class Edge:
-        source: "DataflowGraph.Node"
-        target: "DataflowGraph.Node"
-        taint_level: TaintConfidence
-
-        def __repr__(self):
-            return f"Edge({self.source} -> {self.target}, taint={self.taint_level})"
-
-    nodes: list
-    edges: list
-
-    def __hash__(self):
-        return hash((tuple(self.nodes), tuple(self.edges)))
-
-    def __repr__(self):
-        return f"DataflowGraph(nodes={self.nodes}, edges={self.edges})"

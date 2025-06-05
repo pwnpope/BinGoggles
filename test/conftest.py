@@ -18,7 +18,7 @@ def binary_ninja_path(request):
 @pytest.fixture(scope="module")
 def bg_init(request):
     if request.config.getoption("--rpyc"):
-        from bingoggles.vfa import BGInitRpyc as BGInitialization
+        from bingoggles.bg import BGInitRpyc as BGInitialization
     else:
-        from bingoggles.vfa import BGInit as BGInitialization
+        from bingoggles.bg import BGInit as BGInitialization
     return BGInitialization

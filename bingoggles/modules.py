@@ -1,14 +1,13 @@
 from binaryninja.enums import MediumLevelILOperation
-from binaryninja.mediumlevelil import MediumLevelILVar
-from binaryninja.enums import MediumLevelILOperation
-from binaryninja.mediumlevelil import MediumLevelILVar
-
+from binaryninja.mediumlevelil import MediumLevelILVar, MediumLevelILConst
+from binaryninja import BinaryView
 from bingoggles.auxiliary import func_name_to_object
 from bingoggles.bingoggles_types import *
+from typing import Union
 
 
 class UseAfterFreeDetection:
-    def __init__(self, bv, slice_data: dict):
+    def __init__(self, bv: BinaryView, slice_data: dict = None):
         """
         Detect use-after-free (UAF) vulnerabilities through interprocedural taint analysis.
 
@@ -51,19 +50,20 @@ class UseAfterFreeDetection:
         self.slice_data = slice_data
         self.alloc_functions = ["malloc", "new", "realloc", "calloc"]
         self.dealloc_functions = ["free", "delete", "realloc"]
-        self.combined_tainted_vars_path = [
-            var.variable
-            for _, (path_data, tainted_vars) in self.slice_data.items()
-            for var in tainted_vars
-        ]
+        if self.slice_data:
+            self.combined_tainted_vars_path = [
+                var.variable
+                for _, (path_data, tainted_vars) in self.slice_data.items()
+                for var in tainted_vars
+            ]
 
-    def _flatten_path_data(self):
+    def _flatten_path_data(self) -> list:
         flattened = []
         for _, (locs, _) in self.slice_data.items():
             flattened.extend(locs)
         return sorted(flattened, key=lambda x: x.addr)
 
-    def analyzer(self, parent_function_name=None) -> VulnReport | None:
+    def analyzer(self, parent_function_name=None) -> Union[VulnReport, None]:
         """
         Analyze sliced data to detect potential Use-After-Free (UAF) vulnerabilities.
 
@@ -88,6 +88,9 @@ class UseAfterFreeDetection:
             - Each `VulnReport` contains a traceable path of `TaintedLOC` instances indicating
               where a freed variable was subsequently accessed.
         """
+
+        if not self.slice_data:
+            raise ValueError("slice_data must be provided in order to run this function")
 
         use_after_frees_detected = {}
         count = 1
@@ -168,7 +171,7 @@ class UseAfterFreeDetection:
             - Updates `self.dealloc_functions` dynamically if new deallocation functions are discovered.
             - Prevents infinite recursion by not re-analyzing the same function name in direct cycles.
         """
-        fn = func_name_to_object(self, func_name)
+        fn = func_name_to_object(self.bv, func_name)
         if not fn:
             return False
 
@@ -329,7 +332,27 @@ class UseAfterFreeDetection:
                                 if func.name == "realloc"
                                 else loc.params[0]
                             )
+                            #:TODO implement different alloc functions to get their respective size param and see if the size is reallocated
+                            # if func.name == "realloc":
+                            #     size = loc.params[1]
+                            # elif func.name == "malloc" or func.name == "new":
+                            #     size = loc.params[0]
+                            # elif func.name == "calloc":
+                            #     nbytes = loc.params[0]
+                            #     element_size = loc.params[1]
+                            #     if isinstance(
+                            #         nbytes, MediumLevelILConst
+                            #     ) and isinstance(element_size, MediumLevelILConst):
+                            #         size = nbytes.constant * element_size.constant
+                            #     else:
+                            #         size = nbytes
+                            # else:
+                            #     raise NotImplementedError(
+                            #         f"Unhandled allocator function: {func.name}"
+                            #     )
 
+                            # We're returning false here because we're assuming we're able to influence or control the size
+                            # meaning we can make it go into another size range, this is very guessy though.
                             if (
                                 isinstance(size, MediumLevelILVar)
                                 and size in tainted_vars
@@ -353,7 +376,7 @@ class UseAfterFreeDetection:
         # Start checking from the current function
         return check_allocations_in_function(func_object, dealloc_loc, alloc_func)
 
-    def _returns_after_being_freed(self, path_data, dealloc_loc: TaintedLOC):
+    def _returns_after_being_freed(self, path_data, dealloc_loc: TaintedLOC) -> bool:
         """
         Determines if the function returns immediately after a deallocation, without further tainted usage.
 
@@ -471,7 +494,7 @@ class UseAfterFreeDetection:
 
         Returns:
             bool: True if `realloc` is acting as a deallocation (i.e., size is 0 or tainted),
-                  False if it’s acting as a normal reallocation.
+                  False if it's acting as a normal reallocation.
 
         Notes:
             - Used to distinguish whether `realloc` should be treated like `free`.
@@ -484,10 +507,17 @@ class UseAfterFreeDetection:
 
             if isinstance(size, MediumLevelILVar) and size in tainted_vars:
                 return True
+            
+            elif (size, MediumLevelILConst) and int(size.value) == 0:
+                return True
+                
             elif (
                 int(size.operation) == int(MediumLevelILOperation.MLIL_CONST)
-                and int(size.value) == 0
+                and int(size) == 0
             ):
                 return True
 
         return False
+
+class BuildVFG:
+    pass

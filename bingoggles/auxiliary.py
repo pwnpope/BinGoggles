@@ -5,6 +5,7 @@ from binaryninja.mediumlevelil import (
     MediumLevelILLoad,
     MediumLevelILConstPtr,
     MediumLevelILVar,
+    MediumLevelILConst
 )
 from binaryninja.highlevelil import HighLevelILOperation, HighLevelILInstruction
 from colorama import Fore
@@ -12,7 +13,6 @@ from typing import Sequence, Dict, Tuple, Optional, Union
 from .bingoggles_types import *
 from binaryninja.enums import MediumLevelILOperation, SymbolType
 from binaryninja import BinaryView, Symbol
-from .vfa import Analysis
 
 
 def flat(
@@ -30,15 +30,13 @@ def flat(
     - Append any other non-list operands as-is.
 
     Args:
-        ops: A sequence of operands which may include nested lists, arbitrary objects,
-             or `HighLevelILInstruction` instances.
+        ops (Sequence[Union[HighLevelILInstruction, MediumLevelILInstruction]]): A sequence of operands which may include nested lists, arbitrary objects, or `HighLevelILInstruction` instances.
 
     Returns:
         A flat list where:
         - Nested lists from the original `ops` are expanded one level deep (recursively).
         - All `HighLevelILInstruction` objects are included.
-        - Any direct child `HighLevelILInstruction` operands of those instructions
-          are also included.
+        - Any direct child `HighLevelILInstruction` operands of those instructions are also included.
         - All other operands are carried through unchanged.
     """
     flat_list = []
@@ -62,8 +60,8 @@ def get_symbol_from_const_ptr(
     Resolve a const-pointer operand back to its data symbol.
 
     Args:
-        bv:        The BinaryView containing your symbols.
-        const_ptr: An MLIL ConstPtr whose .value is the address of some data.
+        bv (BinaryView):        The BinaryView containing your symbols.
+        const_ptr (MediumLevelILConstPtr): An MLIL ConstPtr whose .value is the address of some data.
 
     Returns:
         The matching Symbol of type DataSymbol, or None if not found.
@@ -171,11 +169,12 @@ def param_var_map(
     return param_info
 
 
-def addr_to_func(bv, address: int) -> Function | None:
+def addr_to_func(bv: BinaryView, address: int) -> Function | None:
     """
     `addr_to_func` Get the function object from an address
 
     Args:
+        bv: (BinaryView): Binary Ninja BinaryView
         address (int): address to the start or within the function object
 
     Returns:
@@ -189,17 +188,18 @@ def addr_to_func(bv, address: int) -> Function | None:
         return None
 
 
-def func_name_to_object(analysis, func_name: str) -> int | None:
+def func_name_to_object(bv: BinaryView, func_name: str) -> int | None:
     """
     `func_name_to_object` Get a function address from a name
 
     Args:
         func_name (str): function name
+        bv (BinaryView): Binary Ninja BinaryView
 
     Returns:
         Binary ninja function object
     """
-    for func in analysis.bv.functions:
+    for func in bv.functions:
         if func.name == func_name:
             return func
     else:
@@ -263,9 +263,7 @@ def get_struct_field_name(loc: MediumLevelILInstruction):
     Extract the struct field name token from an MLIL instruction.
 
     This helper inspects the instruction's operation and returns the token
-    corresponding to the struct member's name. It currently handles two cases:
-      - `MLIL_SET_VAR`: returns the 5th token (index 4)
-      - `MLIL_STORE_STRUCT`: returns the 3rd token (index 2)
+    corresponding to the struct member's name.
 
     Args:
         loc (MediumLevelILInstruction): The MLIL instruction that performs a struct
@@ -274,21 +272,18 @@ def get_struct_field_name(loc: MediumLevelILInstruction):
     Returns:
         str: The name of the struct field referenced in the instruction tokens.
     """
-    #:TODO this will not work in production, beacuse we need to account for nested structs, etc etc, this should be more robust
     if loc.operation == int(MediumLevelILOperation.MLIL_SET_VAR):
-        return loc.tokens[4]
+        return loc.tokens[-1].text
 
     elif loc.operation == int(MediumLevelILOperation.MLIL_STORE_STRUCT):
-        return loc.tokens[2]
+        field_name_index = next((i for i, t in enumerate(loc.tokens) if t.text == " = "), None)
+        return loc.tokens[field_name_index - 1].text
 
-    else:
-        raise ValueError(
-            f"[Error] Could not find struct member name\n[LOC (unhandled)]: {loc}"
-        )
+    raise ValueError(f"[Error] Could not find struct member name in LOC: {loc}")
 
 
 def get_mlil_glob_refs(
-    analysis: Analysis, function_object: Function, var_to_trace: TaintedGlobal
+    analysis, function_object: Function, var_to_trace: TaintedGlobal
 ) -> list:
     """
     Finds all MLIL instructions that reference a given global variable.
@@ -441,6 +436,9 @@ def trace_tainted_variable(
 
         elif isinstance(v, TaintedStructMember):
             return str(v.member)
+        
+        elif isinstance(v, TaintedAddressOfField):
+            return v.name
 
         else:
             return v.variable.name
@@ -558,24 +556,45 @@ def trace_tainted_variable(
                     offset = None
 
                     if len(instr_mlil.dest.operands) == 1:
-                        address_variable = instr_mlil.dest.operands[0]
+                        addr_var = instr_mlil.dest.operands[0]
 
                     elif len(instr_mlil.dest.operands) == 2:
                         address_variable, offset_variable = instr_mlil.dest.operands
-                        addr_var, offset = address_variable.operands
+                        if isinstance(offset_variable, MediumLevelILConst):
+                            addr_var, offset = instr_mlil.dest.operands
+                            offset_variable = None
+                        else:
+                            addr_var, offset = address_variable.operands
 
-                        offset_var_taintedvar = [
-                            var.variable
-                            for var in already_iterated
-                            if var.variable == offset_variable
-                        ]
+                        if offset_variable:
+                            offset_var_taintedvar = [
+                                var.variable
+                                for var in already_iterated
+                                if var.variable == offset_variable
+                            ]
 
                     if offset_var_taintedvar:
                         vars_found.append(
                             TaintedAddressOfField(
-                                variable=addr_var or address_variable,
+                                variable=addr_var,
                                 offset=offset,
                                 offset_var=offset_var_taintedvar,
+                                confidence_level=TaintConfidence.Tainted,
+                                loc_address=instr_mlil.address,
+                                targ_function=function_object,
+                            )
+                        )
+
+                    elif offset_variable:
+                        vars_found.append(
+                            TaintedAddressOfField(
+                                variable=addr_var,
+                                offset=offset,
+                                offset_var=TaintedVar(
+                                    variable=offset_variable,
+                                    confidence_level=TaintConfidence.NotTainted,
+                                    loc_address=instr_mlil.address,
+                                ),
                                 confidence_level=TaintConfidence.Tainted,
                                 loc_address=instr_mlil.address,
                                 targ_function=function_object,
@@ -585,13 +604,9 @@ def trace_tainted_variable(
                     else:
                         vars_found.append(
                             TaintedAddressOfField(
-                                variable=addr_var or address_variable,
+                                variable=addr_var if isinstance(addr_var, Variable) else addr_var.var,
                                 offset=offset,
-                                offset_var=TaintedVar(
-                                    variable=offset_variable,
-                                    confidence_level=TaintConfidence.NotTainted,
-                                    loc_address=instr_mlil.address,
-                                ),
+                                offset_var=None,
                                 confidence_level=TaintConfidence.Tainted,
                                 loc_address=instr_mlil.address,
                                 targ_function=function_object,
