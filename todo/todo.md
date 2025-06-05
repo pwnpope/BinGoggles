@@ -1,7 +1,7 @@
-# BinGoggles v.0.3 TODO
+# BinGoggles TODO
 
 ## 📚 Documentation & Packaging
-- [ ] Review and enhance all docstrings after finishing 0.0.3
+- [x] Documentation
 - [x] Write valid assertions in test/test_cases.py
 - [ ] Set up server with a subdomain for bingoggles documentation
 
@@ -14,7 +14,7 @@
   - [ ] Integrate imported function taint analysis into engine
 - [ ] Improve `is_function_param_tainted`
   - [x] Improve the function to account for more SSA MLIL operations
-  - [ ] Memoize results and save to disk or something, this is really useful for things like when your analyzing many binaries and they all use libc or something.
+  - [ ] Memoize results
     <!--
         __builtin_memcpy(dest, src, n)
         __builtin_memset(s, c, n)
