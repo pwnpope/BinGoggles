@@ -5,7 +5,7 @@ from binaryninja.mediumlevelil import (
     MediumLevelILLoad,
     MediumLevelILConstPtr,
     MediumLevelILVar,
-    MediumLevelILConst
+    MediumLevelILConst,
 )
 from binaryninja.highlevelil import HighLevelILOperation, HighLevelILInstruction
 from colorama import Fore
@@ -276,7 +276,9 @@ def get_struct_field_name(loc: MediumLevelILInstruction):
         return loc.tokens[-1].text
 
     elif loc.operation == int(MediumLevelILOperation.MLIL_STORE_STRUCT):
-        field_name_index = next((i for i, t in enumerate(loc.tokens) if t.text == " = "), None)
+        field_name_index = next(
+            (i for i, t in enumerate(loc.tokens) if t.text == " = "), None
+        )
         return loc.tokens[field_name_index - 1].text
 
     raise ValueError(f"[Error] Could not find struct member name in LOC: {loc}")
@@ -436,7 +438,7 @@ def trace_tainted_variable(
 
         elif isinstance(v, TaintedStructMember):
             return str(v.member)
-        
+
         elif isinstance(v, TaintedAddressOfField):
             return v.name
 
@@ -444,15 +446,21 @@ def trace_tainted_variable(
             return v.variable.name
 
     while vars_found:
-        var_to_trace = vars_found.pop(0)
-        addresses = [i.addr for i in collected_locs]
-        var_name = get_var_name(var_to_trace)
+        var_to_trace = vars_found.pop(
+            0
+        )  # pop a var to trace off of the vars_found list
+        var_name = get_var_name(
+            var_to_trace
+        )  # variable name of the current variable we're tracing
 
+        # never trace the same variable twice
         if var_name in [get_var_name(var) for var in already_iterated]:
             continue
 
+        # since we are tracing a new variable, we're going to append to the already_iterated list
         already_iterated.append(var_to_trace)
 
+        # Exact the variable use sites for the target variable to trace
         if isinstance(var_to_trace, TaintedGlobal):
             variable_use_sites = get_mlil_glob_refs(
                 analysis, function_object, var_to_trace
@@ -466,11 +474,15 @@ def trace_tainted_variable(
                 var_to_trace.variable
             )
 
+        # iterate over each variable reference
         for ref in variable_use_sites:
             instr_mlil = function_object.get_llil_at(ref.address).mlil
-            if not instr_mlil:
+            if (
+                not instr_mlil
+            ):  # if we cannot resolve the instr mlil then we skip the reference
                 continue
 
+            # make sure that we're either going backwards or forwards depending on what the caller of the function specified in arguments
             if trace_type == SliceType.Forward:
                 if collected_locs and instr_mlil.instr_index < mlil_loc.instr_index:
                     continue
@@ -479,9 +491,7 @@ def trace_tainted_variable(
                 if collected_locs and instr_mlil.instr_index > mlil_loc.instr_index:
                     continue
 
-            if instr_mlil.address in addresses:
-                continue
-
+            # see if the var to trace is used as a pointer to an array or something, typical for MLIL_STORE/MLIL_LOAD type operations
             if isinstance(var_to_trace, TaintedAddressOfField):
                 if not is_address_of_field_offset_match(instr_mlil, var_to_trace):
                     continue
@@ -604,7 +614,11 @@ def trace_tainted_variable(
                     else:
                         vars_found.append(
                             TaintedAddressOfField(
-                                variable=addr_var if isinstance(addr_var, Variable) else addr_var.var,
+                                variable=(
+                                    addr_var
+                                    if isinstance(addr_var, Variable)
+                                    else addr_var.var
+                                ),
                                 offset=offset,
                                 offset_var=None,
                                 confidence_level=TaintConfidence.Tainted,
@@ -613,7 +627,6 @@ def trace_tainted_variable(
                             )
                         )
 
-                    # Add other cases where the above wouldn't be sufficient i guess if any.
                     tainted_loc = TaintedLOC(
                         instr_mlil,
                         instr_mlil.address,
@@ -631,80 +644,85 @@ def trace_tainted_variable(
                 # Handle the case that we get a MLIL_CALL and we want to essentially taint the data passed into it or assigned from it
                 # variables tainted here are marked with "maybe" as the confidence level.
                 case int(MediumLevelILOperation.MLIL_CALL):
-                    #:TODO implement this part
-                    imported_function = analysis.is_function_imported(instr_mlil)
-                    if imported_function:
-                        analysis.analyze_imported_function(imported_function)
-
                     if instr_mlil.params:
-                        parameters_tainted = []
-                        tainted_call_params = []
+                        #:TODO Imported function analysis
+                        imported_function = analysis.is_function_imported(instr_mlil)
 
-                        params_mapped, tainted_func_param = (
-                            get_func_param_from_call_param(
-                                analysis.bv, instr_mlil, var_to_trace
+                        if imported_function and analysis.libraries_mapped:
+                            #:TODO finish this
+                            imported_function_interproc_results = analysis.analyze_imported_function(imported_function, var_to_trace)
+                            print(f"interproc imported func results {imported_function_interproc_results}")
+
+                        else:
+                            parameters_tainted = []
+                            tainted_call_params = []
+
+                            params_mapped, tainted_func_param = (
+                                get_func_param_from_call_param(
+                                    analysis.bv, instr_mlil, var_to_trace
+                                )
                             )
-                        )
-                        call_func_object = addr_to_func(
-                            analysis.bv, int(str(instr_mlil.dest), 16)
-                        )
-
-                        if call_func_object:
-                            interproc_results = analysis.is_function_param_tainted(
-                                function_node=call_func_object,
-                                tainted_params=tainted_func_param,
+                            call_func_object = addr_to_func(
+                                analysis.bv, int(str(instr_mlil.dest), 16)
                             )
 
-                            if analysis.verbose:
-                                analysis.is_function_param_tainted_printed = False
+                            if call_func_object:
+                                interproc_results = analysis.trace_function_taint(
+                                    function_node=call_func_object,
+                                    tainted_params=tainted_func_param,
+                                    binary_view=analysis.bv
+                                )
 
-                            if (
-                                interproc_results.is_return_tainted
-                                and instr_mlil.vars_written
-                            ):
-                                for var_assigned in instr_mlil.vars_written:
-                                    vars_found.append(
-                                        TaintedVar(
-                                            var_assigned,
-                                            TaintConfidence.Tainted,
-                                            instr_mlil.address,
+                                if analysis.verbose:
+                                    analysis.trace_function_taint_printed = False
+
+                                if (
+                                    interproc_results.is_return_tainted
+                                    and instr_mlil.vars_written
+                                ):
+                                    for var_assigned in instr_mlil.vars_written:
+                                        vars_found.append(
+                                            TaintedVar(
+                                                var_assigned,
+                                                TaintConfidence.Tainted,
+                                                instr_mlil.address,
+                                            )
                                         )
-                                    )
 
-                            if interproc_results.tainted_param_names:
-                                for call_param, func_param in params_mapped.items():
-                                    for (
-                                        tainted_func_param
-                                    ) in interproc_results.tainted_param_names:
-                                        if func_param.name == tainted_func_param:
-                                            parameters_tainted.append(call_param)
+                                if interproc_results.tainted_param_names:
+                                    for call_param, func_param in params_mapped.items():
+                                        for (
+                                            tainted_func_param
+                                        ) in interproc_results.tainted_param_names:
+                                            if func_param.name == tainted_func_param:
+                                                parameters_tainted.append(call_param)
 
-                                    for param in parameters_tainted:
-                                        try:
-                                            tainted_call_params.append(
-                                                TaintedVar(
-                                                    param.var,
-                                                    var_to_trace.confidence_level,
-                                                    instr_mlil.address,
+                                        for param in parameters_tainted:
+                                            try:
+                                                tainted_call_params.append(
+                                                    TaintedVar(
+                                                        param.var,
+                                                        var_to_trace.confidence_level,
+                                                        instr_mlil.address,
+                                                    )
                                                 )
-                                            )
 
-                                        except AttributeError:
-                                            glob_symbol = get_symbol_from_const_ptr(
-                                                analysis.bv, param
-                                            )
-
-                                            tainted_call_params.append(
-                                                TaintedGlobal(
-                                                    glob_symbol.name,
-                                                    var_to_trace.confidence_level,
-                                                    instr_mlil.address,
-                                                    param,
-                                                    glob_symbol,
+                                            except AttributeError:
+                                                glob_symbol = get_symbol_from_const_ptr(
+                                                    analysis.bv, param
                                                 )
-                                            )
 
-                                    vars_found.extend(tainted_call_params)
+                                                tainted_call_params.append(
+                                                    TaintedGlobal(
+                                                        glob_symbol.name,
+                                                        var_to_trace.confidence_level,
+                                                        instr_mlil.address,
+                                                        param,
+                                                        glob_symbol,
+                                                    )
+                                                )
+
+                                        vars_found.extend(tainted_call_params)
 
                     tainted_loc = TaintedLOC(
                         instr_mlil,

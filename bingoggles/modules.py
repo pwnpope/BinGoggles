@@ -90,7 +90,9 @@ class UseAfterFreeDetection:
         """
 
         if not self.slice_data:
-            raise ValueError("slice_data must be provided in order to run this function")
+            raise ValueError(
+                "slice_data must be provided in order to run this function"
+            )
 
         use_after_frees_detected = {}
         count = 1
@@ -507,10 +509,10 @@ class UseAfterFreeDetection:
 
             if isinstance(size, MediumLevelILVar) and size in tainted_vars:
                 return True
-            
+
             elif (size, MediumLevelILConst) and int(size.value) == 0:
                 return True
-                
+
             elif (
                 int(size.operation) == int(MediumLevelILOperation.MLIL_CONST)
                 and int(size) == 0
@@ -518,6 +520,7 @@ class UseAfterFreeDetection:
                 return True
 
         return False
+
 
 class BuildVFG:
     pass

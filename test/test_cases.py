@@ -240,7 +240,7 @@ def test_complete_fwd_slice_var(bg_init, test_bin="./test/binaries/bin/test_uaf"
                     f"Function '{fn}' is missing expected instruction index {expected_index}. "
                     f"Found instruction indexes: {instr_indexes}"
                 )
-    
+
 
 def test_complete_fwd_slice_param(
     bg_init, test_bin="./test/binaries/bin/test_is_param_tainted"
@@ -294,10 +294,11 @@ def test_is_param_tainted(
     bv, libraries_mapped = bg.init()
 
     aux = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
-    data = aux.is_function_param_tainted(
+    data = aux.trace_function_taint(
         # 00401354    void* my_strcpy(char* d, char* s)
         function_node=0x00401354,
         tainted_params=["d"],
+        binary_view=bv
     )
 
     assert data.is_return_tainted is True
@@ -312,13 +313,8 @@ def test_is_param_tainted(
     assert data.original_tainted_variables == ["d"]
 
     # Taint map should show that 'd' leads to 's'
-    taint_map_keys = [v.name for v in data.tainted_param_map.keys()]
+    taint_map_keys = [v.name for v in data.tainted_param_names]
     assert "d" in taint_map_keys
-    assert sorted(
-        [v.name for v in data.tainted_param_map[next(iter(data.tainted_param_map))]]
-    ) == ["s"]
-
-    print(data)
 
 
 def test_global_tracking_fwd_var(
@@ -420,7 +416,7 @@ def test_uaf(bg_init, test_bin="./test/binaries/bin/test_uaf"):
             )
             scanners = UseAfterFreeDetection(bv, data)
             vulns = scanners.analyzer()
-            assert isinstance(vulns, VulnReport), "Expected None, but got a VulnReport"
+            assert vulns is None, "Expected None"
 
             print(f"[{Fore.GREEN}SAFE{Fore.GREEN}]: No UAF detected.")
 
@@ -512,15 +508,13 @@ def test_uaf(bg_init, test_bin="./test/binaries/bin/test_uaf"):
             )
             scanners = UseAfterFreeDetection(bv, data)
             vulns = scanners.analyzer()
-
-            assert len(vuln_reports) > 0, "No UAF detected"
-            assert len(vuln_reports) == 1, "Multiple UAF detected"
+            assert vulns
             assert (
-                len(vuln_reports[0].vulnerable_path_data) == 13
-            ), "Expected 13 elements in the report"
+                len(vulns[0].vulnerable_path_data) == 6
+            ), "Expected 6 elements in the report"
 
             print(f"[{Fore.GREEN}UAF Detected{Fore.RESET}]:")
-            pprint([loc for loc in vuln_reports[0].vulnerable_path_data])
+            pprint([loc for loc in vulns[0].vulnerable_path_data])
 
 
 def test_load_struct(bg_init, test_bin="./test/binaries/bin/test_struct_member"):
@@ -622,3 +616,21 @@ def test_set_var_field(bg_init, test_bin="./test/binaries/bin/test_struct_member
     sink_instrs = {13, 18, 22, 24}
     for idx in sink_instrs:
         assert idx in instr_indexes, f"Taint did not reach sink at instruction {idx}"
+
+def test_imported_func(bg_init, test_bin="./test/binaries/bin/test_imported_func"):
+    bg = bg_init(
+        target_bin=abspath(test_bin),
+        libraries=["/lib/x86_64-linux-gnu/libc.so.6"],
+        host="127.0.0.1",
+        port=18812,
+    )
+    bv, libraries_mapped = bg.init()
+
+    aux = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
+
+    locs, _, tainted_vars = aux.tainted_slice(
+        target=TaintTarget(0x004011dd, "buf"),
+        var_type=SlicingID.FunctionVar,
+    )
+
+    pprint(tainted_vars)

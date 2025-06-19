@@ -26,6 +26,7 @@ class TaintConfidence:
     - MaybeTainted (0.5): The variable might be tainted.
     - NotTainted (0.0): The variable is known to be clean.
     """
+
     Tainted = 1.0
     MaybeTainted = 0.5
     NotTainted = 0.0
@@ -48,6 +49,7 @@ class TaintedGlobal:
         const_ptr (MediumLevelILConstPtr): The IL constant pointer used to reference the global.
         symbol_object (CoreSymbol): The Binary Ninja symbol representing the global variable.
     """
+
     def __init__(
         self,
         variable: str,
@@ -150,6 +152,7 @@ class SliceType:
         Forward (int): Forward slicing (from source to sink).
         Backward (int): Backward slicing (from sink to source).
     """
+
     Forward = 0x0
     Backward = 0x1
 
@@ -178,6 +181,7 @@ class OutputMode:
         Returned (int): Return the data programmatically.
         Printed (int): Print the data to standard output.
     """
+
     Returned = 0x0
     Printed = 0x1
 
@@ -231,9 +235,7 @@ class TaintedAddressOfField:
 
     def __repr__(self):
         var_taint = self.confidence_level
-        offset_var_taint = (
-            self.offset_var.confidence_level if self.offset_var else None
-        )
+        offset_var_taint = self.offset_var.confidence_level if self.offset_var else None
 
         if (
             var_taint == TaintConfidence.Tainted
@@ -252,9 +254,7 @@ class TaintedAddressOfField:
             var_taint == TaintConfidence.MaybeTainted
             and offset_var_taint == TaintConfidence.MaybeTainted
         ):
-            taint_status = (
-                f"{Fore.LIGHTMAGENTA_EX}ReferenceVar + OffsetVar Maybe Tainted{Fore.RESET}"
-            )
+            taint_status = f"{Fore.LIGHTMAGENTA_EX}ReferenceVar + OffsetVar Maybe Tainted{Fore.RESET}"
         elif var_taint == TaintConfidence.MaybeTainted:
             taint_status = (
                 f"{Fore.LIGHTMAGENTA_EX}Byte(s) at reference Maybe Tainted{Fore.RESET}"
@@ -287,7 +287,6 @@ class TaintedAddressOfField:
                 f"{Fore.CYAN}{self.offset_var.variable}{Fore.RESET}] -> "
                 f"[{taint_status}]"
             )
-
 
 
 class BGInit:
@@ -437,8 +436,8 @@ class BGInitRpyc(BGInit):
         imported_functions_mapped = None
 
         if len(self.libraries) > 0:
-            # This is temporary while bingoggles is still in development
-            answer = input("Do you want to load the libraries you selected? [y/n]: ")
+            # This is temporary while bingoggles is still in development, long term vision hopefully some of this can be automated
+            answer = input("Load libraries? [y/n]: ")
             if answer == "" or answer == "n":
                 return bv, None
             else:
@@ -511,6 +510,7 @@ class TaintTarget:
         loc_address (int): Address of the instruction referencing the variable.
         variable (Variable | str): The variable to trace (either a Binja object or its name).
     """
+
     def __init__(self, loc_address: int, variable: Variable | str):
         self.loc_address = loc_address
         self.variable = variable
@@ -566,7 +566,7 @@ class TaintedLOC:
 
     This class holds the metadata for a specific line of code (MediumLevelILInstruction)
     that has been identified as part of a tainted data flow path. It links the instruction
-    to the variable being tracked, the variable it may have propagated from, and the 
+    to the variable being tracked, the variable it may have propagated from, and the
     confidence level assigned to the taint at that point.
 
     Attributes:
@@ -578,6 +578,7 @@ class TaintedLOC:
         taint_confidence (TaintConfidence): The confidence level (Tainted, MaybeTainted, NotTainted).
         function_object (Function): The Binary Ninja function object this instruction belongs to.
     """
+
     def __init__(
         self,
         loc: MediumLevelILInstruction,  # Line of code
@@ -634,6 +635,7 @@ class VulnReport:
     Attributes:
         vulnerable_path_data (List[TaintedLOC]): List of tainted code locations forming a vulnerable execution path.
     """
+
     def __init__(self, vulnerable_path_data: List[TaintedLOC]):
         self.vulnerable_path_data = vulnerable_path_data
 
@@ -642,4 +644,3 @@ class VulnReport:
 
     def __repr__(self):
         return f"VulnReport(vulnerable_path_data={self.vulnerable_path_data})"
-

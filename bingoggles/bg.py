@@ -47,7 +47,7 @@ class Analysis:
             complete_slice(target, var_type, slice_type, output, analyze_imported_functions) -> dict:
                 Traces taint propagation across functions, forming a complete variable flow graph-like structure.
 
-            is_function_param_tainted(function_node, tainted_params, ...) -> InterprocTaintResult:
+            trace_function_taint(function_node, tainted_params, ...) -> InterprocTaintResult:
                 Recursively determines whether a function's parameters or return value become tainted.
         """
         self.bv = binaryview
@@ -56,7 +56,7 @@ class Analysis:
         self.glob_refs_memoized = {}
 
         if self.verbose:
-            self.is_function_param_tainted_printed = False
+            self.trace_function_taint_printed = False
 
     def get_sliced_calls(
         self,
@@ -132,7 +132,7 @@ class Analysis:
         var_type: SlicingID,
         output: OutputMode = OutputMode.Returned,
         slice_type: SliceType = SliceType.Forward,
-    ) -> tuple[list, str, list[Variable]] | None:
+    ) -> Union[tuple[list, str, list[Variable]], None]:
         """
         Perform a taint analysis slice (forward or backward) from a specified target variable.
 
@@ -174,12 +174,8 @@ class Analysis:
         instr_mlil = None
         if var_type != SlicingID.FunctionParam:
             instr_mlil = func_obj.get_llil_at(target.loc_address).mlil
-
             if instr_mlil is None:
-                print(
-                    f"[{Fore.RED}Error{Fore.RESET}] Could not find MLIL instruction at address: {target.loc_address}"
-                )
-                return None
+                raise AttributeError(f"[{Fore.RED}Error{Fore.RESET}] The address you provided for the target variable is likely wrong.")
 
         # Start by tracing the initial target variable
         match var_type:
@@ -485,10 +481,15 @@ class Analysis:
                     ...
                 }
         """
-        propagation_cache = OrderedDict()  # Stores final result of taint propagation per function+variable
-        visited = set()  # Prevents infinite recursion over the same (function, parameter) pair
+        propagation_cache = (
+            OrderedDict()
+        )  # Stores final result of taint propagation per function+variable
+        visited = (
+            set()
+        )  # Prevents infinite recursion over the same (function, parameter) pair
         imported_functions = {
-            s.name for s in self.bv.get_symbols_of_type(SymbolType.ImportedFunctionSymbol)
+            s.name
+            for s in self.bv.get_symbols_of_type(SymbolType.ImportedFunctionSymbol)
         }
 
         def _recurse_slice(
@@ -516,9 +517,12 @@ class Analysis:
             target_obj = TaintTarget(address, variable)
             slice_data, func_name, propagated_vars = self.tainted_slice(
                 target=target_obj,
-                var_type=SlicingID.FunctionParam
-                if isinstance(variable, Variable) and variable in func_obj.parameter_vars
-                else SlicingID.FunctionVar,
+                var_type=(
+                    SlicingID.FunctionParam
+                    if isinstance(variable, Variable)
+                    and variable in func_obj.parameter_vars
+                    else SlicingID.FunctionVar
+                ),
                 slice_type=slice_type,
             )
 
@@ -530,13 +534,21 @@ class Analysis:
             if sliced_calls is None:
                 return
 
-            for (caller_func, loc_addr), (callee_name, callee_addr, loc, param_map) in sliced_calls.items():
+            for (caller_func, loc_addr), (
+                callee_name,
+                callee_addr,
+                loc,
+                param_map,
+            ) in sliced_calls.items():
                 if not analyze_imported_functions and callee_name in imported_functions:
                     continue
 
                 for param_var, (_, arg_pos) in param_map.items():
                     param_name = getattr(param_var, "var", param_var).name
-                    propagated_names = {getattr(v.variable, "var", v.variable).name for v in propagated_vars}
+                    propagated_names = {
+                        getattr(v.variable, "var", v.variable).name
+                        for v in propagated_vars
+                    }
                     callee_func = addr_to_func(self.bv, callee_addr)
                     try:
                         callee_param = callee_func.parameter_vars[arg_pos - 1]
@@ -544,7 +556,7 @@ class Analysis:
                         continue
 
                     recurse_key = (callee_func.name, callee_param)
-                    
+
                     if param_name not in propagated_names:
                         continue
 
@@ -579,10 +591,18 @@ class Analysis:
         # Check for initial cross-function taint propagation
         sliced_calls = self.get_sliced_calls(slice_data, og_func_name, propagated_vars)
         if sliced_calls:
-            for (caller_func, loc_addr), (callee_name, callee_addr, loc, param_map) in sliced_calls.items():
+            for (caller_func, loc_addr), (
+                callee_name,
+                callee_addr,
+                loc,
+                param_map,
+            ) in sliced_calls.items():
                 for param_var, (_, arg_pos) in param_map.items():
                     param_name = getattr(param_var, "var", param_var).name
-                    propagated_names = {getattr(v.variable, "var", v.variable).name for v in propagated_vars}
+                    propagated_names = {
+                        getattr(v.variable, "var", v.variable).name
+                        for v in propagated_vars
+                    }
 
                     if param_name not in propagated_names:
                         continue
@@ -600,8 +620,11 @@ class Analysis:
                     if recurse_key in visited:
                         continue
                     visited.add(recurse_key)
-                    
-                    if not analyze_imported_functions and callee_name in imported_functions:
+
+                    if (
+                        not analyze_imported_functions
+                        and callee_name in imported_functions
+                    ):
                         continue
 
                     _recurse_slice(callee_func.name, callee_param, callee_addr)
@@ -609,53 +632,60 @@ class Analysis:
         # Handle printed output, if requested
         if output == OutputMode.Printed:
             for (fn_name, var), (locs, _) in propagation_cache.items():
-                print(f"Function: {fn_name} | Var: {var.name if hasattr(var, 'name') else var}")
+                print(
+                    f"Function: {fn_name} | Var: {var.name if hasattr(var, 'name') else var}"
+                )
                 for entry in locs:
                     print(entry)
 
         return propagation_cache
 
-
-
-    def is_function_param_tainted(
+    def trace_function_taint(
         self,
         function_node: int | Function,
         tainted_params: Variable | str | list[Variable],
+        binary_view: BinaryView = None,
         origin_function: Function = None,
         original_tainted_params: Variable | str | list[Variable] = None,
         tainted_param_map: dict = None,
-        recursion_limit=8,
-        sub_functions_analyzed=0,
-    ):
+        recursion_limit = 8,
+        sub_functions_analyzed = 0,
+    ) -> InterprocTaintResult:
         """
-        Perform interprocedural taint analysis to determine if a function's parameters or return value are tainted.
+        Perform interprocedural taint analysis to determine whether any parameters or the return value 
+        of a function are tainted, directly or indirectly.
 
-        This method takes an entry function and a set of tainted parameters, then performs a taint analysis
-        on the function body and recursively on any called sub-functions to determine whether any of its parameters
-        or return value are affected. It tracks assignments, calls, field operations, and propagates taint accordingly.
+        Starting from one or more tainted parameters, this method analyzes the taint flow within a 
+        function and recursively into any functions it calls. Taint is propagated through variable 
+        assignments, field accesses, and calls, and the analysis tracks whether taint returns to 
+        the caller or spreads to other parameters.
 
         Args:
-            function_node (int | Function): Either the starting address or Binary Ninja `Function` object to analyze.
-            tainted_params (Variable | str | list[Variable]): The parameter(s) to start tracking taint from.
-                Can be a single Variable, a parameter name (str), or a list of Variable objects.
-            origin_function (Function, optional): Internally used to identify the root function when tracing across calls.
-            original_tainted_params (Variable | str | list[Variable], optional): Original tainted input for context.
-            tainted_param_map (dict, optional): A mapping from original parameters to other discovered tainted parameters.
-            recursion_limit (int, optional): The maximum recursion depth for interprocedural analysis. Defaults to 8.
-            sub_functions_analyzed (int, optional): Internal counter for recursion depth tracking.
+            function_node (int | Function): Target function for analysis, provided as either a function start address or a Binary Ninja `Function` object.
+            tainted_params (Variable | str | list[Variable]): One or more parameters to treat as initially tainted. Accepts a single `Variable`, parameter name (`str`), or a list of `Variable` objects.
+            binary_view (BinaryView, optional): The BinaryView context for address resolution. Defaults to `self.bv` if not explicitly provided.
+            origin_function (Function, optional): Used internally to track the original entry point of the analysis.
+            original_tainted_params (Variable | str | list[Variable], optional): Original tainted inputs (preserved for reporting).
+            tainted_param_map (dict, optional): Maps each tainted parameter to others it influences.
+            recursion_limit (int, optional): Maximum depth for recursive analysis into sub-functions. Defaults to 8.
+            sub_functions_analyzed (int, optional): Tracks how deep the current recursive call chain has gone.
 
         Returns:
-            InterprocTaintResult: A structured result containing:
-                - `tainted_param_names` (set[str]): Parameter names determined to be tainted.
-                - `original_tainted_variables`: The original tainted parameter(s) used as input.
-                - `is_return_tainted` (bool): Whether the return value of the function is tainted.
-                - `tainted_param_map` (dict): A mapping of original parameter to other tainted parameters.
+            InterprocTaintResult: A result object containing:
+                - `tainted_param_names` (set[str]): Names of parameters found to be tainted.
+                - `original_tainted_variables` (list[TaintedVar]): The original tainted input(s).
+                - `is_return_tainted` (bool): True if the function's return value is tainted.
+                - `tainted_param_map` (dict): A mapping of input parameters to any other parameters they taint.
 
         Raises:
-            ValueError: If the given address does not resolve to a function.
+            ValueError: If the provided function address cannot be resolved to a valid function.
         """
         if tainted_param_map is None:
             tainted_param_map = {}
+
+        if binary_view is None:
+            binary_view = self.bv
+
 
         def walk_variable(var_mapping: dict, key_names: set):
             """
@@ -686,7 +716,7 @@ class Analysis:
         # Convert function_node to a Function object if it's provided as an integer address
         if isinstance(function_node, int):
             addr = function_node
-            function_node = addr_to_func(self.bv, function_node)
+            function_node = addr_to_func(binary_view, function_node)
             if function_node is None:
                 raise ValueError(
                     f"[{Fore.RED}ERROR{Fore.RESET}]Could not find target function from address @ {addr:#0x}"
@@ -713,13 +743,13 @@ class Analysis:
         if not isinstance(tainted_params, list):
             tainted_params = [get_ssa_variable(function_node, tainted_params)]
 
-        if self.verbose and not self.is_function_param_tainted_printed:
+        if self.verbose and not self.trace_function_taint_printed:
             print(
-                # f"\n{Fore.LIGHTRED_EX}is_function_param_tainted{Fore.RESET}({Fore.MAGENTA}self, function_node: int | Function, "
+                # f"\n{Fore.LIGHTRED_EX}trace_function_taint{Fore.RESET}({Fore.MAGENTA}self, function_node: int | Function, "
                 f"tainted_params: Variable | str | list[Variable]{Fore.RESET})\n-> {Fore.LIGHTBLUE_EX}{function_node}"
                 f"{Fore.RESET}:{Fore.BLUE}{tainted_params}{Fore.RESET}\n{Fore.GREEN}{'='*113}{Fore.RESET}"
             )
-            self.is_function_param_tainted_printed = True
+            self.trace_function_taint_printed = True
 
         # Convert string parameter names to Variable objects in SSA form and wrap them in TaintedVar
         for param in tainted_params:
@@ -813,7 +843,11 @@ class Analysis:
                         else:
                             tainted_variables.add(
                                 TaintedAddressOfField(
-                                    variable=addr_var if isinstance(addr_var, Variable) else addr_var,
+                                    variable=(
+                                        addr_var
+                                        if isinstance(addr_var, Variable)
+                                        else addr_var
+                                    ),
                                     offset=offset,
                                     offset_var=None,
                                     confidence_level=TaintConfidence.Tainted,
@@ -842,7 +876,7 @@ class Analysis:
                             if isinstance(param, MediumLevelILVarSsa)
                         ]
 
-                        call_object = addr_to_func(self.bv, int(str(loc.dest), 16))
+                        call_object = addr_to_func(binary_view, int(str(loc.dest), 16))
 
                         if self.verbose:
                             print(
@@ -866,12 +900,13 @@ class Analysis:
                         ]
 
                         if recursion_limit < sub_functions_analyzed:
-                            interproc_results = self.is_function_param_tainted(
-                                call_object,
-                                tainted_sub_params,
-                                origin_function,
-                                original_tainted_params,
-                                tainted_param_map,
+                            interproc_results = self.trace_function_taint(
+                                function_node=call_object,
+                                tainted_params=tainted_sub_params,
+                                binary_view=binary_view,
+                                origin_function=origin_function,
+                                original_tainted_params=original_tainted_params,
+                                tainted_param_map=tainted_param_map,
                             )
 
                             sub_functions_analyzed += 1
@@ -916,7 +951,7 @@ class Analysis:
                             int(MediumLevelILOperation.MLIL_NORET),
                         ]:
                             print(
-                                "[is_function_param_tainted (WIP)] Unaccounted for operation",
+                                "[trace_function_taint (WIP)] Unaccounted for operation",
                                 loc.operation.name,
                                 hex(loc.address),
                                 loc,
@@ -971,11 +1006,6 @@ class Analysis:
                     if isinstance(use_site, MediumLevelILRet):
                         ret_variable_tainted = True
 
-        # DEBUG
-        # from pprint import pprint
-        # pprint(variable_mapping)
-        # pprint(tainted_variables)
-
         return InterprocTaintResult(
             tainted_param_names=tainted_parameters,
             original_tainted_variables=original_tainted_params,
@@ -984,28 +1014,65 @@ class Analysis:
         )
 
     def is_function_imported(self, instr_mlil: MediumLevelILInstruction) -> bool:
-        if instr_mlil.operation != MediumLevelILOperation.MLIL_CALL:
-            return False
+        """
+        Determine whether the given MLIL call instruction targets an imported function.
 
-        call_dest = instr_mlil.dest
-        if call_dest.operation == MediumLevelILOperation.MLIL_CONST_PTR:
-            func_address = call_dest.constant
+        This function checks if the destination of a MLIL_CALL or MLIL_CALL_SSA instruction is a constant
+        address, and if so, resolves the function at that address. If the resolved function corresponds to 
+        an imported function (i.e., resides in the import table), the function returns its symbol.
+
+        Parameters:
+            instr_mlil (MediumLevelILInstruction): The MLIL call instruction to analyze.
+
+        Returns:
+            Union[Symbol, bool]: 
+                - The Symbol object if the function is imported (e.g., from a shared library or external module).
+                - False if the call does not target an imported function or cannot be resolved.
+
+        Notes:
+            - Indirect calls through registers, stack, or function pointers are not resolved.
+        """
+        call_target = instr_mlil.dest
+
+        if call_target.operation == int(MediumLevelILOperation.MLIL_CONST_PTR):
+            target_addr = call_target.constant
+        elif call_target.operation == int(MediumLevelILOperation.MLIL_CONST):
+            target_addr = call_target.constant
         else:
             return False
 
-        target_symbol = self.bv.get_symbol_at(func_address)
-        if not target_symbol:
+        func = self.bv.get_function_at(int(target_addr))
+        if not func:
             return False
 
-        if target_symbol.type == SymbolType.ImportedFunctionSymbol.value:
-            return target_symbol
-
+        is_imported = int(func.symbol.type.value) == int(SymbolType.ImportedFunctionSymbol)
+        if is_imported:
+            return func.symbol
         else:
             return False
 
-    #:TODO implement this
-    def analyze_imported_function(self, func_symbol):
-        for _, lib_binary_view in self.libraries_mapped.items():
-            for function in lib_binary_view.functions:
-                if function.name == func_symbol.name:
-                    print("AAAA", function.mlil)
+
+    def analyze_imported_function(self, func_symbol: Symbol, tainted_param: Variable) -> Union[InterprocTaintResult, None]:
+        """
+        Analyze an imported function from a mapped library to determine if a specific parameter is tainted.
+
+        This method looks up the given function symbol in all mapped libraries, and if a matching function
+        is found, performs taint analysis on it using `trace_function_taint`.
+
+        Args:
+            func_symbol (Symbol): The symbol representing the imported function to analyze.
+            tainted_param (Variable): The variable or parameter to check for taint propagation.
+
+        Returns:
+            Union[InterprocTaintResult, None]: The result of the taint analysis if the function is found and analyzed,
+            otherwise None.
+        
+        Notes:
+            Currently this functionality for imported function analysis needs to be revised, if another function is imported in the library that's being analyzed 
+        """
+        for lib_name, lib_binary_view in self.libraries_mapped.items():
+            for func in lib_binary_view.functions:
+                if func.name == func_symbol.name:
+                    return self.trace_function_taint(function_node=func, tainted_params=tainted_param, binary_view=lib_binary_view)
+
+        return None
