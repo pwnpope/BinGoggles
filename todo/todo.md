@@ -5,14 +5,10 @@
 - [x] Write valid assertions in test/test_cases.py
 - [ ] Set up server with a subdomain for bingoggles documentation
 
-## 🧪 Testing & Validation
-- [ ] Expand tests for:
-  - [ ] Imported functions
-
 ## 🧩 Taint Analysis Improvements
 - [ ] Add support for imported functions
   - [ ] Integrate imported function taint analysis into engine
-- [ ] Improve `is_function_param_tainted`
+- [ ] Improve `trace_function_taint`
   - [x] Improve the function to account for more SSA MLIL operations
   - [ ] Memoize results
     <!--
