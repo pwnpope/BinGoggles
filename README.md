@@ -12,7 +12,7 @@ A **complete slice** traces a tainted variable's full journey through function c
 ## How is BinGoggles Unique?
 - [x] **Platform agnostic** – Runs on Linux, macOS, and Windows
 - [x] **Intraprocedural and interprocedural analysis** – Track variable flow within and across functions
-- [ ] **Library agnostic (mostly)** – User defines any external libraries for deeper analysis
+- [X] **Imported function analysis** – User defines any external libraries for deeper analysis
     - work in progress
 - [x] **Architecture/language agnostic (mostly)** – Works with any binary that loads into Binary Ninja
 - [x] **Supports all variable types** – Local variables, struct members, globals, and function parameters
@@ -20,6 +20,10 @@ A **complete slice** traces a tainted variable's full journey through function c
 - [x] **Bidirectional taint analysis** – Supports both forward and backward slicing
 - [x] **Embedded-friendly** – Well-suited for firmware and embedded target analysis
 - [x] **Headless compatible** – Supports both Hugsy’s and Binary Ninja’s headless modes
+
+## Limitations
+- Purely static analysis
+- Functions that get analyzed by binja that happen to have macro use or intrinsic function use will fail to be analyzed accurately
 
 ## Install
 #### A) Setup python virtual environment
