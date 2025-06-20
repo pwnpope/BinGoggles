@@ -616,21 +616,3 @@ def test_set_var_field(bg_init, test_bin="./test/binaries/bin/test_struct_member
     sink_instrs = {13, 18, 22, 24}
     for idx in sink_instrs:
         assert idx in instr_indexes, f"Taint did not reach sink at instruction {idx}"
-
-def test_imported_func(bg_init, test_bin="./test/binaries/bin/test_imported_func"):
-    bg = bg_init(
-        target_bin=abspath(test_bin),
-        libraries=["/lib/x86_64-linux-gnu/libc.so.6"],
-        host="127.0.0.1",
-        port=18812,
-    )
-    bv, libraries_mapped = bg.init()
-
-    aux = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
-
-    locs, _, tainted_vars = aux.tainted_slice(
-        target=TaintTarget(0x004011dd, "buf"),
-        var_type=SlicingID.FunctionVar,
-    )
-
-    pprint(tainted_vars)

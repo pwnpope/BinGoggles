@@ -141,7 +141,7 @@ def get_struct_field_refs(
 
 
 def param_var_map(
-    params: Sequence[MediumLevelILVar], propagated_vars: Sequence[TaintedVar]
+    params: List[MediumLevelILVar], propagated_vars: List[TaintedVar]
 ) -> Dict[MediumLevelILVar, Tuple[int, int]]:
     """
     Build a map of MLIL call parameters that correspond to your propagated taint variables.
@@ -151,7 +151,7 @@ def param_var_map(
       - the parameter's position in the argument list (also 1-based).
 
     Args:
-        params:   The sequence of MLIL call-site parameters.
+        params:   The list of MLIL call-site parameters.
         propagated_vars:   The list of `TaintedVar` instances you've already discovered.
 
     Returns:
@@ -645,13 +645,34 @@ def trace_tainted_variable(
                 # variables tainted here are marked with "maybe" as the confidence level.
                 case int(MediumLevelILOperation.MLIL_CALL):
                     if instr_mlil.params:
-                        #:TODO Imported function analysis
                         imported_function = analysis.is_function_imported(instr_mlil)
 
                         if imported_function and analysis.libraries_mapped:
-                            #:TODO finish this
+                            #:TODO How can this be improved? when analyzing functions with variable arguments this will fail to analyze effectively (i think, not testing yet for that)
+
+                            # Analyze the imported function and see if the parameters or return variable are tainted by the current variable that we're tracing
                             imported_function_interproc_results = analysis.analyze_imported_function(imported_function, var_to_trace)
-                            print(f"interproc imported func results {imported_function_interproc_results}")
+                            if imported_function_interproc_results:
+                                zipped_results = list(zip(imported_function_interproc_results.tainted_param_names, instr_mlil.params))
+                                for src_func_param, var in zipped_results:
+                                    if var.var != var_to_trace.variable:
+                                        vars_found.append(
+                                            TaintedVar(
+                                                var.var,
+                                                TaintConfidence.Tainted,
+                                                instr_mlil.address,
+                                                )
+                                        )
+                                
+                                if imported_function_interproc_results.is_return_tainted:
+                                    return_variable = instr_mlil.vars_written[0]
+                                    vars_found.append(
+                                        TaintedVar(
+                                            return_variable,
+                                            TaintConfidence.Tainted,
+                                            instr_mlil.address,
+                                            )
+                                    )
 
                         else:
                             parameters_tainted = []

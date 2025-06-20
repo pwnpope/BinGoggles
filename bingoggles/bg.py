@@ -949,13 +949,10 @@ class Analysis:
                             int(MediumLevelILOperation.MLIL_GOTO),
                             int(MediumLevelILOperation.MLIL_IF),
                             int(MediumLevelILOperation.MLIL_NORET),
+                            int(MediumLevelILOperation.MLIL_NORET),
+                            int(MediumLevelILOperation.MLIL_SYSCALL_SSA),
                         ]:
-                            print(
-                                "[trace_function_taint (WIP)] Unaccounted for operation",
-                                loc.operation.name,
-                                hex(loc.address),
-                                loc,
-                            )
+                            continue
 
                 # Map variables written to the variables read in the current instruction
                 for var_assignment in loc.vars_written:
@@ -1011,6 +1008,7 @@ class Analysis:
             original_tainted_variables=original_tainted_params,
             is_return_tainted=ret_variable_tainted,
             tainted_param_map=tainted_param_map,
+            target_function_params=origin_function.parameter_vars,
         )
 
     def is_function_imported(self, instr_mlil: MediumLevelILInstruction) -> bool:
@@ -1073,6 +1071,10 @@ class Analysis:
         for lib_name, lib_binary_view in self.libraries_mapped.items():
             for func in lib_binary_view.functions:
                 if func.name == func_symbol.name:
-                    return self.trace_function_taint(function_node=func, tainted_params=tainted_param, binary_view=lib_binary_view)
+                    text_section = lib_binary_view.sections.get(".text")
+                    for func in lib_binary_view.functions:
+                        if text_section.start <= func.start < text_section.end:
+                            if func_symbol.name.lower() in func.name.lower():
+                                return self.trace_function_taint(function_node=func, tainted_params=tainted_param, binary_view=lib_binary_view)
 
         return None
