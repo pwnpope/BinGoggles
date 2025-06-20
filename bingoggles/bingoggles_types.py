@@ -535,11 +535,13 @@ class InterprocTaintResult:
         tainted_param_map: dict,
         original_tainted_variables: list[TaintedVar],
         is_return_tainted: bool,
+        target_function_params: List[Variable]
     ):
         self.tainted_param_names = tainted_param_names
         self.tainted_param_map = tainted_param_map
         self.original_tainted_variables = original_tainted_variables
         self.is_return_tainted = is_return_tainted
+        self.target_function_params = target_function_params
 
     def __hash__(self):
         return hash(
@@ -548,6 +550,7 @@ class InterprocTaintResult:
                 frozenset(self.tainted_param_map.items()),
                 tuple(self.original_tainted_variables),
                 self.is_return_tainted,
+                tuple(self.target_function_params)
             )
         )
 
@@ -556,7 +559,8 @@ class InterprocTaintResult:
             f"{Fore.MAGENTA}Tainted Parameter Names:{Fore.RESET} {self.tainted_param_names}\n"
             f"{Fore.CYAN}Original Tainted Variables:{Fore.RESET} {self.original_tainted_variables}\n"
             f"{Fore.YELLOW}Is Return Tainted:{Fore.RESET} {self.is_return_tainted}\n"
-            f"{Fore.GREEN}Tainted Parameter Map:{Fore.RESET} {self.tainted_param_map}"
+            f"{Fore.GREEN}Tainted Parameter Map:{Fore.RESET} {self.tainted_param_map}\n"
+            f"{Fore.BLUE}Target Function Parameters:{Fore.RESET} {self.target_function_params}"
         )
 
 
