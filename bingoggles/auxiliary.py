@@ -809,10 +809,9 @@ def trace_tainted_variable(
                                         )
 
                         else:
-                            parameters_tainted = []
                             tainted_call_params = []
 
-                            params_mapped, tainted_func_param = (
+                            _, tainted_func_param = (
                                 get_func_param_from_call_param(
                                     analysis.bv, instr_mlil, var_to_trace
                                 )
