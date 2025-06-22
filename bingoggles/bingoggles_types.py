@@ -167,6 +167,7 @@ class SlicingID:
         GlobalVar (int): A global variable symbol.
         StructMember (int): A member of a struct.
     """
+
     FunctionVar = 0x10
     FunctionParam = 0x20
     GlobalVar = 0x30
@@ -535,7 +536,7 @@ class InterprocTaintResult:
         tainted_param_map: dict,
         original_tainted_variables: list[TaintedVar],
         is_return_tainted: bool,
-        target_function_params: List[Variable]
+        target_function_params: List[Variable],
     ):
         self.tainted_param_names = tainted_param_names
         self.tainted_param_map = tainted_param_map
@@ -550,7 +551,7 @@ class InterprocTaintResult:
                 frozenset(self.tainted_param_map.items()),
                 tuple(self.original_tainted_variables),
                 self.is_return_tainted,
-                tuple(self.target_function_params)
+                tuple(self.target_function_params),
             )
         )
 
@@ -648,3 +649,31 @@ class VulnReport:
 
     def __repr__(self):
         return f"VulnReport(vulnerable_path_data={self.vulnerable_path_data})"
+
+
+class FunctionModel:
+    def __init__(
+        self,
+        name: str,
+        taint_sources: list[int],
+        taint_destinations: list[int],
+        taints_return: bool,
+        taints_varargs: bool = False,
+        vararg_start_index: int = None,
+    ):
+        self.name = name
+        self.taint_sources = taint_sources
+        self.taint_destinations = taint_destinations
+        self.taints_return = taints_return
+        self.taints_varargs = taints_varargs
+        self.vararg_start_index = vararg_start_index
+
+    def __repr__(self):
+        return (
+            f"FunctionModel(name='{self.name}', "
+            f"taint_sources={self.taint_sources}, "
+            f"taint_destinations={self.taint_destinations}, "
+            f"taints_return={self.taints_return}, "
+            f"taints_varargs={self.taints_varargs}, "
+            f"vararg_start_index={self.vararg_start_index})"
+        )

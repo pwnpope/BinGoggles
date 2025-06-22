@@ -10,9 +10,10 @@ from binaryninja.mediumlevelil import (
 from binaryninja.highlevelil import HighLevelILOperation, HighLevelILInstruction
 from colorama import Fore
 from typing import Sequence, Dict, Tuple, Optional, Union
-from .bingoggles_types import *
+from bingoggles_types import *
 from binaryninja.enums import MediumLevelILOperation, SymbolType
 from binaryninja import BinaryView, Symbol
+from function_registry import modeled_functions, get_function_model
 
 
 def flat(
@@ -475,6 +476,8 @@ def trace_tainted_variable(
             )
 
         # iterate over each variable reference
+        print(var_to_trace, hex(var_to_trace.loc_address))
+
         for ref in variable_use_sites:
             instr_mlil = function_object.get_llil_at(ref.address).mlil
             if (
@@ -495,7 +498,8 @@ def trace_tainted_variable(
             if isinstance(var_to_trace, TaintedAddressOfField):
                 if not is_address_of_field_offset_match(instr_mlil, var_to_trace):
                     continue
-
+            
+            # print("Currently on: ", instr_mlil.instr_index, instr_mlil, var_to_trace)
             match int(instr_mlil.operation):
                 case int(MediumLevelILOperation.MLIL_STORE_STRUCT):
                     struct_offset = instr_mlil.ssa_form.offset
@@ -596,20 +600,43 @@ def trace_tainted_variable(
                         )
 
                     elif offset_variable:
-                        vars_found.append(
-                            TaintedAddressOfField(
-                                variable=addr_var,
-                                offset=offset,
-                                offset_var=TaintedVar(
-                                    variable=offset_variable,
-                                    confidence_level=TaintConfidence.NotTainted,
+                        try:
+                            vars_found.append(
+                                TaintedAddressOfField(
+                                    variable=address_variable,
+                                    offset=offset,
+                                    offset_var=TaintedVar(
+                                        variable=offset_variable,
+                                        confidence_level=TaintConfidence.NotTainted,
+                                        loc_address=instr_mlil.address,
+                                    ),
+                                    confidence_level=var_to_trace.confidence_level,
                                     loc_address=instr_mlil.address,
-                                ),
-                                confidence_level=TaintConfidence.Tainted,
-                                loc_address=instr_mlil.address,
-                                targ_function=function_object,
+                                    targ_function=function_object,
+                                )
                             )
-                        )
+
+                        except AttributeError:
+                            glob_symbol = get_symbol_from_const_ptr(
+                                analysis.bv, variable_written_to
+                            )
+                            if glob_symbol:
+                                vars_found.append(
+                                    TaintedAddressOfField(
+                                        variable=address_variable,
+                                        offset=offset,
+                                        offset_var=TaintedGlobal(
+                                            glob_symbol.name,
+                                            TaintConfidence.NotTainted,
+                                            instr_mlil.address,
+                                            variable_written_to,
+                                            glob_symbol,
+                                        ),
+                                        confidence_level=var_to_trace.confidence_level,
+                                        loc_address=instr_mlil.address,
+                                        targ_function=function_object,
+                                    )
+                                )
 
                     else:
                         vars_found.append(
@@ -641,19 +668,126 @@ def trace_tainted_variable(
 
                     collected_locs.append(tainted_loc)
 
-                # Handle the case that we get a MLIL_CALL and we want to essentially taint the data passed into it or assigned from it
-                # variables tainted here are marked with "maybe" as the confidence level.
                 case int(MediumLevelILOperation.MLIL_CALL):
                     if instr_mlil.params:
-                        imported_function = analysis.is_function_imported(instr_mlil)
+                        imported_function = analysis.resolve_function_type(instr_mlil)
 
-                        if imported_function and analysis.libraries_mapped:
-                            #:TODO How can this be improved? when analyzing functions with variable arguments this will fail to analyze effectively (i think, not testing yet for that)
+                        if imported_function:
+                            #:TODO How can this be improved? when analyzing functions with complex variable arguments this will fail to analyze effectively (i think, not tested extensively yet for that)
+                            func_analyzed = analysis.analyze_function_taint(
+                                imported_function, var_to_trace
+                            )
 
-                            # Analyze the imported function and see if the parameters or return variable are tainted by the current variable that we're tracing
-                            imported_function_interproc_results = analysis.analyze_imported_function(imported_function, var_to_trace)
-                            if imported_function_interproc_results:
-                                zipped_results = list(zip(imported_function_interproc_results.tainted_param_names, instr_mlil.params))
+                            tainted_variables_to_add = set()
+                            if func_analyzed and isinstance(
+                                func_analyzed, FunctionModel
+                            ):
+                                # Handle vararg functions
+                                if func_analyzed.taints_varargs:
+                                    try:
+                                        dest_tainted = [
+                                            i.var if hasattr(i, "var") else None
+                                            for i in instr_mlil.params
+                                        ].index(
+                                            var_to_trace.variable
+                                        ) > func_analyzed.vararg_start_index
+                                    except ValueError:
+                                        dest_tainted = None
+
+                                    if dest_tainted:
+                                        vararg_indexes = [
+                                            getattr(i, "var", None)
+                                            for i in instr_mlil.params[
+                                                func_analyzed.vararg_start_index :
+                                            ]
+                                        ]
+
+                                        tainted_vararg_indexes = []
+
+                                        for idx, var in enumerate(
+                                            vararg_indexes,
+                                            start=func_analyzed.vararg_start_index,
+                                        ):
+                                            if var is None:
+                                                continue
+
+                                            if var == var_to_trace.variable or var in [
+                                                v.variable for v in already_iterated
+                                            ]:
+                                                tainted_vararg_indexes.append(idx + 1)
+
+                                        if tainted_vararg_indexes:
+                                            for t_src_indx in vararg_indexes:
+                                                for (
+                                                    t_dst_indx
+                                                ) in func_analyzed.taint_destinations:
+                                                    tainted_variables_to_add.add(
+                                                        instr_mlil.params[t_dst_indx]
+                                                    )
+
+                                    for t_var in tainted_variables_to_add:
+                                        try:
+                                            vars_found.append(
+                                                TaintedVar(
+                                                    t_var.var,
+                                                    var_to_trace.confidence_level,
+                                                    instr_mlil.address,
+                                                )
+                                            )
+                                        except AttributeError:
+                                            glob_symbol = get_symbol_from_const_ptr(analysis.bv, t_var)
+                                            if glob_symbol:
+                                                vars_found.append(
+                                                    TaintedGlobal(
+                                                        glob_symbol.name,
+                                                        var_to_trace.confidence_level,
+                                                        instr_mlil.address,
+                                                        t_var.var,
+                                                        glob_symbol,
+                                                    )
+                                                )
+
+
+                                    if func_analyzed.taints_return:
+                                        for t_var in instr_mlil.vars_written:
+                                            vars_found.append(
+                                                TaintedVar(
+                                                    t_var,
+                                                    TaintConfidence.Tainted,
+                                                    instr_mlil.address,
+                                                )
+                                            )
+
+                                # Handle none vararg functions
+                                else:
+                                    for t_src_indx in func_analyzed.taint_sources:
+                                        for (
+                                            t_dst_indx
+                                        ) in func_analyzed.taint_destinations:
+                                            tainted_variables_to_add.add(
+                                                instr_mlil.params[t_dst_indx]
+                                            )
+
+                                    if func_analyzed.taints_return:
+                                        for t_var in instr_mlil.vars_written:
+                                            vars_found.append(
+                                                TaintedVar(
+                                                    t_var,
+                                                    TaintConfidence.Tainted,
+                                                    instr_mlil.address,
+                                                )
+                                            )
+
+                            elif func_analyzed and isinstance(
+                                func_analyzed, InterprocTaintResult
+                            ):
+                                zipped_results = list(
+                                    zip(
+                                        func_analyzed.tainted_param_names,
+                                        instr_mlil.params,
+                                    )
+                                )
+
                                 for src_func_param, var in zipped_results:
                                     if var.var != var_to_trace.variable:
                                         vars_found.append(
@@ -661,18 +795,18 @@ def trace_tainted_variable(
                                                 var.var,
                                                 TaintConfidence.Tainted,
                                                 instr_mlil.address,
-                                                )
-                                        )
-                                
-                                if imported_function_interproc_results.is_return_tainted:
-                                    return_variable = instr_mlil.vars_written[0]
-                                    vars_found.append(
-                                        TaintedVar(
-                                            return_variable,
-                                            TaintConfidence.Tainted,
-                                            instr_mlil.address,
                                             )
-                                    )
+                                        )
+
+                                if func_analyzed.is_return_tainted:
+                                    for t_var in instr_mlil.vars_written:
+                                        vars_found.append(
+                                            TaintedVar(
+                                                t_var,
+                                                TaintConfidence.Tainted,
+                                                instr_mlil.address,
+                                            )
+                                        )
 
                         else:
                             parameters_tainted = []
@@ -691,8 +825,10 @@ def trace_tainted_variable(
                                 interproc_results = analysis.trace_function_taint(
                                     function_node=call_func_object,
                                     tainted_params=tainted_func_param,
-                                    binary_view=analysis.bv
+                                    binary_view=analysis.bv,
                                 )
+
+                                print(interproc_results)
 
                                 if analysis.verbose:
                                     analysis.trace_function_taint_printed = False
@@ -705,24 +841,27 @@ def trace_tainted_variable(
                                         vars_found.append(
                                             TaintedVar(
                                                 var_assigned,
-                                                TaintConfidence.Tainted,
+                                                var_to_trace.confidence_level,
                                                 instr_mlil.address,
                                             )
                                         )
 
                                 if interproc_results.tainted_param_names:
-                                    for call_param, func_param in params_mapped.items():
-                                        for (
-                                            tainted_func_param
-                                        ) in interproc_results.tainted_param_names:
-                                            if func_param.name == tainted_func_param:
-                                                parameters_tainted.append(call_param)
+                                    zipped_results = list(
+                                        zip(
+                                            interproc_results.tainted_param_names,
+                                            instr_mlil.params,
+                                        )
+                                    )
 
-                                        for param in parameters_tainted:
+                                    print(zipped_results, var_to_trace, instr_mlil)
+
+                                    for src_func_param, var in zipped_results:
+                                        if var.var != var_to_trace.variable:
                                             try:
-                                                tainted_call_params.append(
+                                                vars_found.append(
                                                     TaintedVar(
-                                                        param.var,
+                                                        var.var,
                                                         var_to_trace.confidence_level,
                                                         instr_mlil.address,
                                                     )
@@ -730,7 +869,7 @@ def trace_tainted_variable(
 
                                             except AttributeError:
                                                 glob_symbol = get_symbol_from_const_ptr(
-                                                    analysis.bv, param
+                                                    analysis.bv, var
                                                 )
 
                                                 tainted_call_params.append(
@@ -738,7 +877,7 @@ def trace_tainted_variable(
                                                         glob_symbol.name,
                                                         var_to_trace.confidence_level,
                                                         instr_mlil.address,
-                                                        param,
+                                                        var,
                                                         glob_symbol,
                                                     )
                                                 )
@@ -814,50 +953,121 @@ def trace_tainted_variable(
                             ):
                                 if instr_mlil.vars_written:
                                     for variable_written_to in instr_mlil.vars_written:
-                                        vars_found.append(
-                                            TaintedVar(
-                                                variable_written_to,
-                                                var_to_trace.confidence_level,
-                                                instr_mlil.address,
+                                        try:
+                                            vars_found.append(
+                                                TaintedVar(
+                                                    variable_written_to,
+                                                    var_to_trace.confidence_level,
+                                                    instr_mlil.address,
+                                                )
                                             )
-                                        )
 
+                                        except AttributeError:
+                                            glob_symbol = get_symbol_from_const_ptr(
+                                                analysis.bv, variable_written_to
+                                            )
+                                            if glob_symbol:
+                                                vars_found.append(
+                                                    TaintedGlobal(
+                                                        glob_symbol.name,
+                                                        var_to_trace.confidence_level,
+                                                        instr_mlil.address,
+                                                        variable_written_to,
+                                                        glob_symbol,
+                                                    )
+                                                )
                             else:
                                 if instr_mlil.vars_written:
                                     for variable_written_to in instr_mlil.vars_written:
+                                        try:
+                                            vars_found.append(
+                                                TaintedVar(
+                                                    variable_written_to,
+                                                    TaintConfidence.MaybeTainted,
+                                                    instr_mlil.address,
+                                                )
+                                            )
+
+                                        except AttributeError:
+                                            glob_symbol = get_symbol_from_const_ptr(
+                                                analysis.bv, variable_written_to
+                                            )
+                                            if glob_symbol:
+                                                vars_found.append(
+                                                    TaintedGlobal(
+                                                        glob_symbol.name,
+                                                        TaintConfidence.MaybeTainted,
+                                                        instr_mlil.address,
+                                                        variable_written_to,
+                                                        glob_symbol,
+                                                    )
+                                                )
+
+                        else:
+                            for variable_written_to in instr_mlil.vars_written:
+                                try:
+                                    vars_found.append(
+                                        TaintedAddressOfField(
+                                            variable=address_variable,
+                                            offset=None,
+                                            offset_var=TaintedVar(
+                                                variable=offset_variable,
+                                                confidence_level=TaintConfidence.NotTainted,
+                                                loc_address=instr_mlil.address,
+                                            ),
+                                            confidence_level=var_to_trace.confidence_level,
+                                            loc_address=instr_mlil.address,
+                                            targ_function=function_object,
+                                        )
+                                    )
+
+                                except AttributeError:
+                                    glob_symbol = get_symbol_from_const_ptr(
+                                        analysis.bv, variable_written_to
+                                    )
+                                    if glob_symbol:
                                         vars_found.append(
-                                            TaintedVar(
-                                                variable_written_to,
-                                                TaintConfidence.MaybeTainted,
-                                                instr_mlil.address,
+                                            TaintedAddressOfField(
+                                                variable=address_variable,
+                                                offset=None,
+                                                offset_var=TaintedGlobal(
+                                                    glob_symbol.name,
+                                                    TaintConfidence.NotTainted,
+                                                    instr_mlil.address,
+                                                    variable_written_to,
+                                                    glob_symbol,
+                                                ),
+                                                confidence_level=var_to_trace.confidence_level,
+                                                loc_address=instr_mlil.address,
+                                                targ_function=function_object,
                                             )
                                         )
 
-                        else:
-                            vars_found.append(
-                                TaintedAddressOfField(
-                                    variable=address_variable,
-                                    offset=None,
-                                    offset_var=TaintedVar(
-                                        variable=offset_variable,
-                                        confidence_level=TaintConfidence.NotTainted,
-                                        loc_address=instr_mlil.address,
-                                    ),
-                                    confidence_level=var_to_trace.confidence_level,
-                                    loc_address=instr_mlil.address,
-                                    targ_function=function_object,
-                                )
-                            )
-
                     if instr_mlil.vars_written:
                         for variable_written_to in instr_mlil.vars_written:
-                            vars_found.append(
-                                TaintedVar(
-                                    variable_written_to,
-                                    var_to_trace.confidence_level,
-                                    instr_mlil.address,
+                            try:
+                                vars_found.append(
+                                    TaintedVar(
+                                        variable_written_to,
+                                        var_to_trace.confidence_level,
+                                        instr_mlil.address,
+                                    )
                                 )
-                            )
+
+                            except AttributeError:
+                                glob_symbol = get_symbol_from_const_ptr(
+                                    analysis.bv, variable_written_to
+                                )
+                                if glob_symbol:
+                                    vars_found.append(
+                                        TaintedGlobal(
+                                            glob_symbol.name,
+                                            TaintConfidence.MaybeTainted,
+                                            instr_mlil.address,
+                                            variable_written_to,
+                                            glob_symbol,
+                                        )
+                                    )
 
                     if instr_mlil.vars_read:
                         connected_variable = get_connected_var(
@@ -914,9 +1124,11 @@ def trace_tainted_variable(
                         int(MediumLevelILOperation.MLIL_GOTO),
                         int(MediumLevelILOperation.MLIL_IF),
                     ]:
-                        print(
-                            f"[INFO] we hit an un-accounted for case, here are some details\n[MLIL Operation] {instr_mlil.operation.name}\n[LOC]: {instr_mlil}\n [Address] {instr_mlil.address:#0x}\n\n"
-                        )
+                        continue
+
+                    print(
+                        f"[{Fore.GREEN}INFO{Fore.RESET}] we hit an un-accounted for case, here are some details\n[MLIL Operation] {instr_mlil.operation.name}\n[LOC]: {instr_mlil}\n [Address] {instr_mlil.address:#0x}\n\n"
+                    )
                     # Collect vars written
                     if instr_mlil.vars_written:
                         for variable_written_to in instr_mlil.vars_written:
@@ -931,7 +1143,7 @@ def trace_tainted_variable(
 
                             except AttributeError:
                                 glob_symbol = get_symbol_from_const_ptr(
-                                    analysis.bv, param
+                                    analysis.bv, variable_written_to
                                 )
 
                                 tainted_call_params.append(
@@ -939,7 +1151,7 @@ def trace_tainted_variable(
                                         glob_symbol.name,
                                         var_to_trace.confidence_level,
                                         instr_mlil.address,
-                                        param,
+                                        variable_written_to,
                                         glob_symbol,
                                     )
                                 )

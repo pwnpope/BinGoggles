@@ -10,12 +10,13 @@ from binaryninja.enums import SymbolType
 from functools import cache
 from colorama import Fore
 
-from .bingoggles_types import *
-from .auxiliary import *
+from bingoggles_types import *
+from auxiliary import *
 from binaryninja.enums import MediumLevelILOperation
 from binaryninja import BinaryView
 from collections import OrderedDict
 from typing import List, Union
+from function_registry import get_modeled_function_index
 
 
 class Analysis:
@@ -175,7 +176,9 @@ class Analysis:
         if var_type != SlicingID.FunctionParam:
             instr_mlil = func_obj.get_llil_at(target.loc_address).mlil
             if instr_mlil is None:
-                raise AttributeError(f"[{Fore.RED}Error{Fore.RESET}] The address you provided for the target variable is likely wrong.")
+                raise AttributeError(
+                    f"[{Fore.RED}Error{Fore.RESET}] The address you provided for the target variable is likely wrong."
+                )
 
         # Start by tracing the initial target variable
         match var_type:
@@ -260,10 +263,11 @@ class Analysis:
             case SlicingID.StructMember:
                 # Handle struct member references/derefernces
                 instr_hlil = func_obj.get_llil_at(target.loc_address).hlil
-                struct_offset = instr_mlil.ssa_form.src.offset
-                source = instr_mlil.src
-                source_hlil = instr_hlil.src
-                base_var = source_hlil.var
+
+                try:
+                    struct_offset = instr_mlil.ssa_form.src.offset
+                except AttributeError:
+                    struct_offset = instr_mlil.ssa_form.offset
 
                 if instr_hlil.operation == int(HighLevelILOperation.HLIL_ASSIGN):
                     destination = instr_hlil.dest
@@ -309,6 +313,8 @@ class Analysis:
                                 )
 
                 elif instr_mlil.operation == int(MediumLevelILOperation.MLIL_SET_VAR):
+                    source = instr_mlil.src
+                    base_var = instr_mlil.src.src
                     if source.operation == int(MediumLevelILOperation.MLIL_LOAD_STRUCT):
                         tainted_struct_member = TaintedStructMember(
                             loc_address=target.loc_address,
@@ -648,16 +654,16 @@ class Analysis:
         origin_function: Function = None,
         original_tainted_params: Variable | str | list[Variable] = None,
         tainted_param_map: dict = None,
-        recursion_limit = 8,
-        sub_functions_analyzed = 0,
+        recursion_limit=8,
+        sub_functions_analyzed=0,
     ) -> InterprocTaintResult:
         """
-        Perform interprocedural taint analysis to determine whether any parameters or the return value 
+        Perform interprocedural taint analysis to determine whether any parameters or the return value
         of a function are tainted, directly or indirectly.
 
-        Starting from one or more tainted parameters, this method analyzes the taint flow within a 
-        function and recursively into any functions it calls. Taint is propagated through variable 
-        assignments, field accesses, and calls, and the analysis tracks whether taint returns to 
+        Starting from one or more tainted parameters, this method analyzes the taint flow within a
+        function and recursively into any functions it calls. Taint is propagated through variable
+        assignments, field accesses, and calls, and the analysis tracks whether taint returns to
         the caller or spreads to other parameters.
 
         Args:
@@ -685,7 +691,6 @@ class Analysis:
 
         if binary_view is None:
             binary_view = self.bv
-
 
         def walk_variable(var_mapping: dict, key_names: set):
             """
@@ -1011,46 +1016,49 @@ class Analysis:
             target_function_params=origin_function.parameter_vars,
         )
 
-    def is_function_imported(self, instr_mlil: MediumLevelILInstruction) -> bool:
+    def resolve_function_type(
+        self, instr_mlil: MediumLevelILInstruction
+    ) -> tuple[str, str | Symbol | None]:
         """
-        Determine whether the given MLIL call instruction targets an imported function.
-
-        This function checks if the destination of a MLIL_CALL or MLIL_CALL_SSA instruction is a constant
-        address, and if so, resolves the function at that address. If the resolved function corresponds to 
-        an imported function (i.e., resides in the import table), the function returns its symbol.
+        Determine whether the MLIL call targets an imported function, a builtin, or neither.
 
         Parameters:
             instr_mlil (MediumLevelILInstruction): The MLIL call instruction to analyze.
 
         Returns:
-            Union[Symbol, bool]: 
-                - The Symbol object if the function is imported (e.g., from a shared library or external module).
-                - False if the call does not target an imported function or cannot be resolved.
-
-        Notes:
-            - Indirect calls through registers, stack, or function pointers are not resolved.
+            tuple[str, str | Symbol | None]:
+                - A tuple (type, identifier), where:
+                    - type: 'import', 'builtin', or 'none'
+                    - identifier: Symbol (for imports), or function name (for builtins), or None
         """
         call_target = instr_mlil.dest
 
-        if call_target.operation == int(MediumLevelILOperation.MLIL_CONST_PTR):
-            target_addr = call_target.constant
-        elif call_target.operation == int(MediumLevelILOperation.MLIL_CONST):
+        if call_target.operation in [
+            int(MediumLevelILOperation.MLIL_CONST_PTR),
+            int(MediumLevelILOperation.MLIL_CONST),
+        ]:
             target_addr = call_target.constant
         else:
-            return False
+            return None
 
         func = self.bv.get_function_at(int(target_addr))
         if not func:
-            return False
+            return None
 
-        is_imported = int(func.symbol.type.value) == int(SymbolType.ImportedFunctionSymbol)
-        if is_imported:
-            return func.symbol
-        else:
-            return False
+        if func.symbol.type == SymbolType.ImportedFunctionSymbol.value:
+            return func.symbol.name
 
+        section = self.bv.get_sections_at(target_addr)
+        if section:
+            name = section[0].name
+            if name == ".synthetic_builtins":
+                return True
 
-    def analyze_imported_function(self, func_symbol: Symbol, tainted_param: Variable) -> Union[InterprocTaintResult, None]:
+        return None
+
+    def analyze_function_taint(
+        self, func_symbol: Union[Symbol, str], tainted_param: Variable
+    ) -> Union[InterprocTaintResult, FunctionModel, None]:
         """
         Analyze an imported function from a mapped library to determine if a specific parameter is tainted.
 
@@ -1064,17 +1072,30 @@ class Analysis:
         Returns:
             Union[InterprocTaintResult, None]: The result of the taint analysis if the function is found and analyzed,
             otherwise None.
-        
+
         Notes:
-            Currently this functionality for imported function analysis needs to be revised, if another function is imported in the library that's being analyzed 
+            Currently this functionality for imported function analysis needs to be revised, if another function is imported in the library that's being analyzed
         """
-        for lib_name, lib_binary_view in self.libraries_mapped.items():
-            for func in lib_binary_view.functions:
-                if func.name == func_symbol.name:
-                    text_section = lib_binary_view.sections.get(".text")
-                    for func in lib_binary_view.functions:
-                        if text_section.start <= func.start < text_section.end:
-                            if func_symbol.name.lower() in func.name.lower():
-                                return self.trace_function_taint(function_node=func, tainted_params=tainted_param, binary_view=lib_binary_view)
+
+        # functions that are already modeled (e.g: common libc functions and binja instrinsic functions)
+        if isinstance(func_symbol, str) and func_symbol in [
+            func.name for func in modeled_functions
+        ]:
+            return modeled_functions[get_modeled_function_index(func_symbol)]
+
+        # Analyze imported function
+        if self.libraries_mapped:
+            for lib_name, lib_binary_view in self.libraries_mapped.items():
+                for func in lib_binary_view.functions:
+                    if func.name == func_symbol.name:
+                        text_section = lib_binary_view.sections.get(".text")
+                        for func in lib_binary_view.functions:
+                            if text_section.start <= func.start < text_section.end:
+                                if func_symbol.name.lower() in func.name.lower():
+                                    return self.trace_function_taint(
+                                        function_node=func,
+                                        tainted_params=tainted_param,
+                                        binary_view=lib_binary_view,
+                                    )
 
         return None

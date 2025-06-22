@@ -15,4 +15,4 @@ output.prof
 pytest.ini
 docs/*
 build/*
-test/binaries/uClibc-0.9.33
+test/buildroot

@@ -1,9 +1,11 @@
 SRC_DIR := src
 OBJ_DIR := obj
 BIN_DIR := bin
-CC := gcc-14
+
+BUILDROOT_PATH = ../buildroot
+CC := $(BUILDROOT_PATH)/output/host/bin/i686-buildroot-linux-uclibc-gcc
 CFLAGS := -O0 -g
-LDFLAGS :=
+LDFLAGS := -Wl,--dynamic-linker=$(BUILDROOT_PATH)/output/target/lib/ld-uClibc.so.0 -Wl,-rpath=$(BUILDROOT_PATH)/output/target/lib
 
 SRCS := $(wildcard $(SRC_DIR)/*.c)
 OBJS := $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRCS))
@@ -25,4 +27,4 @@ rm_obj:
 clean:
 	rm -rf $(OBJ_DIR) $(BIN_DIR)
 
-.PHONY: all clean
+.PHONY: all clean rm_obj

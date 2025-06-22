@@ -22,7 +22,6 @@ A **complete slice** traces a tainted variable's full journey through function c
 
 ## Limitations
 - Purely static analysis
-- Functions that get analyzed by binja that happen to have macro use or intrinsic function use will fail to be analyzed accurately
 
 ## Install
 #### A) Setup python virtual environment
