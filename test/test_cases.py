@@ -164,6 +164,7 @@ def test_get_sliced_calls(
     analysis = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
 
     sliced_data, func_name, propagated_vars = analysis.tainted_slice(
+        #    6 @ 08049237  var_2c = &a
         target=TaintTarget(0x08049237, "a"),
         var_type=SlicingID.FunctionVar,
     )
@@ -201,7 +202,7 @@ def test_get_sliced_calls(
     pprint(result)
 
 
-#TODO:FIX 
+# TODO:FIX
 # def test_complete_bkd_slice_var(
 #     bg_init, test_bin=f"{bingoggles_path}/test/binaries/bin/test_backwards_slice"
 # ):

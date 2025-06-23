@@ -13,7 +13,7 @@ from colorama import Fore
 import socket, os, hashlib, pathlib, rpyc, sys
 from rich.progress import Progress
 from rich.status import Status
-from typing import List
+from typing import List, Union
 
 import binaryninja as binja
 
@@ -534,7 +534,7 @@ class InterprocTaintResult:
         self,
         tainted_param_names: set,
         tainted_param_map: dict,
-        original_tainted_variables: list[TaintedVar],
+        original_tainted_variables: Union[list[TaintedVar], TaintedVar],
         is_return_tainted: bool,
         target_function_params: List[Variable],
     ):

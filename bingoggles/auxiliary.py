@@ -476,10 +476,9 @@ def trace_tainted_variable(
             )
 
         # iterate over each variable reference
-        print(var_to_trace, hex(var_to_trace.loc_address))
-
         for ref in variable_use_sites:
             instr_mlil = function_object.get_llil_at(ref.address).mlil
+
             if (
                 not instr_mlil
             ):  # if we cannot resolve the instr mlil then we skip the reference
@@ -488,6 +487,13 @@ def trace_tainted_variable(
             # make sure that we're either going backwards or forwards depending on what the caller of the function specified in arguments
             if trace_type == SliceType.Forward:
                 if collected_locs and instr_mlil.instr_index < mlil_loc.instr_index:
+                    continue
+                if (
+                    instr_mlil.instr_index
+                    < function_object.get_llil_at(
+                        var_to_trace.loc_address
+                    ).mlil.instr_index
+                ):
                     continue
 
             elif trace_type == SliceType.Backward:
@@ -498,8 +504,7 @@ def trace_tainted_variable(
             if isinstance(var_to_trace, TaintedAddressOfField):
                 if not is_address_of_field_offset_match(instr_mlil, var_to_trace):
                     continue
-            
-            # print("Currently on: ", instr_mlil.instr_index, instr_mlil, var_to_trace)
+
             match int(instr_mlil.operation):
                 case int(MediumLevelILOperation.MLIL_STORE_STRUCT):
                     struct_offset = instr_mlil.ssa_form.offset
@@ -670,6 +675,11 @@ def trace_tainted_variable(
 
                 case int(MediumLevelILOperation.MLIL_CALL):
                     if instr_mlil.params:
+                        if var_to_trace.variable not in [
+                            var.var for var in instr_mlil.params if hasattr(var, "var")
+                        ]:
+                            continue
+
                         imported_function = analysis.resolve_function_type(instr_mlil)
 
                         if imported_function:
@@ -735,7 +745,9 @@ def trace_tainted_variable(
                                                 )
                                             )
                                         except AttributeError:
-                                            glob_symbol = get_symbol_from_const_ptr(analysis.bv, t_var)
+                                            glob_symbol = get_symbol_from_const_ptr(
+                                                analysis.bv, t_var
+                                            )
                                             if glob_symbol:
                                                 vars_found.append(
                                                     TaintedGlobal(
@@ -746,7 +758,6 @@ def trace_tainted_variable(
                                                         glob_symbol,
                                                     )
                                                 )
-
 
                                     if func_analyzed.taints_return:
                                         for t_var in instr_mlil.vars_written:
@@ -811,11 +822,10 @@ def trace_tainted_variable(
                         else:
                             tainted_call_params = []
 
-                            _, tainted_func_param = (
-                                get_func_param_from_call_param(
-                                    analysis.bv, instr_mlil, var_to_trace
-                                )
+                            _, tainted_func_param = get_func_param_from_call_param(
+                                analysis.bv, instr_mlil, var_to_trace
                             )
+
                             call_func_object = addr_to_func(
                                 analysis.bv, int(str(instr_mlil.dest), 16)
                             )
@@ -826,8 +836,6 @@ def trace_tainted_variable(
                                     tainted_params=tainted_func_param,
                                     binary_view=analysis.bv,
                                 )
-
-                                print(interproc_results)
 
                                 if analysis.verbose:
                                     analysis.trace_function_taint_printed = False
@@ -853,12 +861,10 @@ def trace_tainted_variable(
                                         )
                                     )
 
-                                    print(zipped_results, var_to_trace, instr_mlil)
-
                                     for src_func_param, var in zipped_results:
                                         if var.var != var_to_trace.variable:
                                             try:
-                                                vars_found.append(
+                                                tainted_call_params.append(
                                                     TaintedVar(
                                                         var.var,
                                                         var_to_trace.confidence_level,

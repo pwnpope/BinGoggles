@@ -785,6 +785,26 @@ class Analysis:
 
         variable_mapping = {}
         tainted_parameters = set()
+        read_write_ops = [
+            int(MediumLevelILOperation.MLIL_SET_VAR),
+            int(MediumLevelILOperation.MLIL_SET_VAR_ALIASED),
+            int(MediumLevelILOperation.MLIL_SET_VAR_ALIASED_FIELD),
+            int(MediumLevelILOperation.MLIL_SET_VAR_FIELD),
+            int(MediumLevelILOperation.MLIL_SET_VAR_SPLIT),
+            int(MediumLevelILOperation.MLIL_LOAD),
+            int(MediumLevelILOperation.MLIL_LOAD_STRUCT),
+            int(MediumLevelILOperation.MLIL_STORE),
+            int(MediumLevelILOperation.MLIL_STORE_STRUCT),
+            int(MediumLevelILOperation.MLIL_VAR),
+            int(MediumLevelILOperation.MLIL_VAR_ALIASED),
+            int(MediumLevelILOperation.MLIL_VAR_ALIASED_FIELD),
+            int(MediumLevelILOperation.MLIL_VAR_FIELD),
+            int(MediumLevelILOperation.MLIL_VAR_SPLIT),
+            int(MediumLevelILOperation.MLIL_VAR_PHI),
+            int(MediumLevelILOperation.MLIL_MEM_PHI),
+            int(MediumLevelILOperation.MLIL_ADDRESS_OF),
+            int(MediumLevelILOperation.MLIL_ADDRESS_OF_FIELD),
+        ]
 
         # Iterate through each MLIL block in the function
         for mlil_block in function_node.mlil:
@@ -960,6 +980,12 @@ class Analysis:
                             continue
 
                 # Map variables written to the variables read in the current instruction
+                # print(type(loc), loc)
+                if hasattr(loc.src, "operation") and loc.src.operation == int(
+                    MediumLevelILOperation.MLIL_ADD
+                ):
+                    continue
+
                 for var_assignment in loc.vars_written:
                     variable_mapping[var_assignment] = loc.vars_read
 
@@ -969,23 +995,57 @@ class Analysis:
                     for read_var in loc.vars_read
                 ):
                     for written_var in loc.vars_written:
-                        tainted_variables.add(
-                            TaintedVar(
-                                written_var,
-                                TaintConfidence.Tainted,
-                                loc.address,
+                        try:
+                            tainted_variables.add(
+                                TaintedVar(
+                                    written_var,
+                                    TaintConfidence.Tainted,
+                                    loc.address,
+                                )
                             )
-                        )
+
+                        except AttributeError:
+                            glob_symbol = get_symbol_from_const_ptr(
+                                binary_view, written_var
+                            )
+                            if glob_symbol:
+                                tainted_variables.add(
+                                    TaintedGlobal(
+                                        glob_symbol.name,
+                                        TaintConfidence.Tainted,
+                                        loc.address,
+                                        written_var,
+                                        glob_symbol,
+                                    )
+                                )
 
         # Extract underlying variables from TaintedVar before walking the mapping.
         underlying_tainted = {tv.variable for tv in tainted_variables}
+        underlying_tainted_object = {tv for tv in tainted_variables}
 
         # Determine all parameters that are tainted by walking through the variable mapping.
-        tainted_parameters.update(
-            var
-            for var in walk_variable(variable_mapping, underlying_tainted)
-            if var.name in [param.name for param in origin_function.parameter_vars]
-        )
+        for var in walk_variable(variable_mapping, underlying_tainted):
+            if var.name not in [param.name for param in origin_function.parameter_vars]:
+                continue
+
+            matching_obj = next(
+                (tv for tv in underlying_tainted_object if tv.variable == var), None
+            )
+            if not matching_obj:
+                continue
+
+            llil_instr = origin_function.get_llil_at(matching_obj.loc_address).mlil
+
+            if (
+                llil_instr.operation not in read_write_ops
+                or hasattr(llil_instr, "src")
+                and llil_instr.src.operation not in read_write_ops
+                or hasattr(llil_instr, "dest")
+                and llil_instr.dest.operation not in read_write_ops
+            ):
+                continue
+
+            tainted_parameters.add(var)
 
         if len(tainted_parameters) > 1:
             tainted_param_map[list(tainted_parameters)[0]] = list(
