@@ -10,6 +10,7 @@ modeled_functions = [
     FunctionModel("read", [0], [1], True),
     FunctionModel("recv", [0], [1], True),
     FunctionModel("gets", [], [0], True),
+    FunctionModel("strlen", [0], [], True),
     FunctionModel(
         name="realloc",
         taint_sources=[0],

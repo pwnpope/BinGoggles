@@ -102,6 +102,7 @@ def get_struct_field_refs(
             A list of MLIL instructions that access the specified struct member,
             combining those found via HLIL operand traversal and direct MLIL variable refs.
     """
+    print('aaa', tainted_struct_member)
 
     def traverse_operand(op):
         if not isinstance(op, HighLevelILInstruction):
@@ -122,6 +123,7 @@ def get_struct_field_refs(
     hlil_use_sites = set()
 
     func_object = bv.get_functions_containing(tainted_struct_member.loc_address)[0]
+    print("we're going to trace: ", tainted_struct_member.hlil_var, tainted_struct_member.variable)
     var_refs_hlil = func_object.get_hlil_var_refs(tainted_struct_member.hlil_var)
     var_refs_mlil = func_object.get_mlil_var_refs(tainted_struct_member.variable)
 
@@ -138,6 +140,8 @@ def get_struct_field_refs(
         [func_object.get_llil_at(i.address).mlil for i in hlil_use_sites]
     )
     mlil_use_sites.extend(var_refs_mlil)
+
+    # print(mlil_use_sites)
     return mlil_use_sites
 
 
@@ -318,6 +322,56 @@ def get_mlil_glob_refs(
     return variable_use_sites
 
 
+def is_rw_operation(instr_mlil: MediumLevelILInstruction):
+    """
+    Determines if the given Medium Level IL instruction represents a read or write operation.
+
+    A read/write operation includes direct variable reads, writes, memory accesses, and address-of operations.
+    This function also checks the `src` and `dest` sub-instructions (if present) to ensure the full expression
+    chain is composed of read/write operations.
+
+    Parameters:
+        instr_mlil (MediumLevelILInstruction): The MLIL instruction to analyze.
+
+    Returns:
+        bool: True if the instruction and its relevant subexpressions are read/write operations, False otherwise.
+    """
+    read_write_ops = [
+        int(MediumLevelILOperation.MLIL_SET_VAR),
+        int(MediumLevelILOperation.MLIL_SET_VAR_ALIASED),
+        int(MediumLevelILOperation.MLIL_SET_VAR_ALIASED_FIELD),
+        int(MediumLevelILOperation.MLIL_SET_VAR_FIELD),
+        int(MediumLevelILOperation.MLIL_SET_VAR_SPLIT),
+        int(MediumLevelILOperation.MLIL_LOAD),
+        int(MediumLevelILOperation.MLIL_LOAD_STRUCT),
+        int(MediumLevelILOperation.MLIL_STORE),
+        int(MediumLevelILOperation.MLIL_STORE_STRUCT),
+        int(MediumLevelILOperation.MLIL_VAR),
+        int(MediumLevelILOperation.MLIL_VAR_ALIASED),
+        int(MediumLevelILOperation.MLIL_VAR_ALIASED_FIELD),
+        int(MediumLevelILOperation.MLIL_VAR_FIELD),
+        int(MediumLevelILOperation.MLIL_VAR_SPLIT),
+        int(MediumLevelILOperation.MLIL_VAR_PHI),
+        int(MediumLevelILOperation.MLIL_MEM_PHI),
+        int(MediumLevelILOperation.MLIL_ADDRESS_OF),
+        int(MediumLevelILOperation.MLIL_ADDRESS_OF_FIELD),
+    ]
+
+    def op_is_rw(il):
+        return hasattr(il, "operation") and int(il.operation) in read_write_ops
+
+    if not op_is_rw(instr_mlil):
+        return False
+
+    if hasattr(instr_mlil, "src") and not op_is_rw(instr_mlil.src):
+        return False
+
+    if hasattr(instr_mlil, "dest") and not op_is_rw(instr_mlil.dest):
+        return False
+
+    return True
+
+
 def trace_tainted_variable(
     analysis,
     function_object: Function,
@@ -478,7 +532,7 @@ def trace_tainted_variable(
         # iterate over each variable reference
         for ref in variable_use_sites:
             instr_mlil = function_object.get_llil_at(ref.address).mlil
-
+            # print("mlil: ", instr_mlil, var_to_trace)
             if (
                 not instr_mlil
             ):  # if we cannot resolve the instr mlil then we skip the reference
@@ -675,11 +729,6 @@ def trace_tainted_variable(
 
                 case int(MediumLevelILOperation.MLIL_CALL):
                     if instr_mlil.params:
-                        if var_to_trace.variable not in [
-                            var.var for var in instr_mlil.params if hasattr(var, "var")
-                        ]:
-                            continue
-
                         imported_function = analysis.resolve_function_type(instr_mlil)
 
                         if imported_function:
@@ -1012,17 +1061,10 @@ def trace_tainted_variable(
                             for variable_written_to in instr_mlil.vars_written:
                                 try:
                                     vars_found.append(
-                                        TaintedAddressOfField(
-                                            variable=address_variable,
-                                            offset=None,
-                                            offset_var=TaintedVar(
-                                                variable=offset_variable,
-                                                confidence_level=TaintConfidence.NotTainted,
-                                                loc_address=instr_mlil.address,
-                                            ),
-                                            confidence_level=var_to_trace.confidence_level,
-                                            loc_address=instr_mlil.address,
-                                            targ_function=function_object,
+                                        TaintedVar(
+                                            variable_written_to,
+                                            var_to_trace.confidence_level,
+                                            instr_mlil.address,
                                         )
                                     )
 
@@ -1032,23 +1074,16 @@ def trace_tainted_variable(
                                     )
                                     if glob_symbol:
                                         vars_found.append(
-                                            TaintedAddressOfField(
-                                                variable=address_variable,
-                                                offset=None,
-                                                offset_var=TaintedGlobal(
-                                                    glob_symbol.name,
-                                                    TaintConfidence.NotTainted,
-                                                    instr_mlil.address,
-                                                    variable_written_to,
-                                                    glob_symbol,
-                                                ),
-                                                confidence_level=var_to_trace.confidence_level,
-                                                loc_address=instr_mlil.address,
-                                                targ_function=function_object,
+                                            TaintedGlobal(
+                                                glob_symbol.name,
+                                                TaintConfidence.MaybeTainted,
+                                                instr_mlil.address,
+                                                variable_written_to,
+                                                glob_symbol,
                                             )
                                         )
 
-                    if instr_mlil.vars_written:
+                    elif instr_mlil.vars_written:
                         for variable_written_to in instr_mlil.vars_written:
                             try:
                                 vars_found.append(
@@ -1073,19 +1108,6 @@ def trace_tainted_variable(
                                             glob_symbol,
                                         )
                                     )
-
-                    if instr_mlil.vars_read:
-                        connected_variable = get_connected_var(
-                            function_object, var_to_trace
-                        )
-                        if connected_variable:
-                            vars_found.append(
-                                TaintedVar(
-                                    connected_variable,
-                                    var_to_trace.confidence_level,
-                                    instr_mlil.address,
-                                )
-                            )
 
                     tainted_loc = TaintedLOC(
                         instr_mlil,
@@ -1124,18 +1146,7 @@ def trace_tainted_variable(
                     )
 
                 case _:
-                    if instr_mlil.operation not in [
-                        int(MediumLevelILOperation.MLIL_RET),
-                        int(MediumLevelILOperation.MLIL_GOTO),
-                        int(MediumLevelILOperation.MLIL_IF),
-                    ]:
-                        continue
-
-                    print(
-                        f"[{Fore.GREEN}INFO{Fore.RESET}] we hit an un-accounted for case, here are some details\n[MLIL Operation] {instr_mlil.operation.name}\n[LOC]: {instr_mlil}\n [Address] {instr_mlil.address:#0x}\n\n"
-                    )
-                    # Collect vars written
-                    if instr_mlil.vars_written:
+                    if instr_mlil.vars_written and is_rw_operation(instr_mlil):
                         for variable_written_to in instr_mlil.vars_written:
                             try:
                                 vars_found.append(

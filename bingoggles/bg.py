@@ -633,7 +633,13 @@ class Analysis:
                     ):
                         continue
 
-                    _recurse_slice(callee_func.name, callee_param, callee_addr)
+                    # we don't want to do a slice into the first LOC if its on a function call and the slice type is backwards
+                    # because in this case we'd want to go backwards NOT into the starting loc function call
+                    if (
+                        target.loc_address != loc_addr
+                        and slice_type != SliceType.Backward
+                    ):
+                        _recurse_slice(callee_func.name, callee_param, callee_addr)
 
         # Handle printed output, if requested
         if output == OutputMode.Printed:
@@ -645,6 +651,30 @@ class Analysis:
                     print(entry)
 
         return propagation_cache
+
+    def find_first_var_use(self, func: Function, var_or_name) -> Union[int, None]:
+        """
+        Return the first MLIL instruction where the given variable is used.
+
+        Args:
+            func (Function): The Binary Ninja Function object.
+            var_or_name (Variable | str): The variable to search for.
+
+        Returns:
+            MediumLevelILInstruction | None: The first MLIL instruction using the variable, or None if not found.
+        """
+        target_var = var_or_name
+        if isinstance(var_or_name, str):
+            matches = [v for v in func.mlil.ssa_form.vars if v.name == var_or_name]
+            if not matches:
+                return None
+            target_var = matches[0]
+
+        for block in func.mlil.ssa_form:
+            for instr in block:
+                if target_var in instr.vars_read or target_var in instr.vars_written:
+                    return instr.address
+        return None
 
     def trace_function_taint(
         self,
@@ -767,7 +797,7 @@ class Analysis:
                         TaintedVar(
                             var_obj,
                             TaintConfidence.Tainted,
-                            function_node.start,
+                            self.find_first_var_use(function_node, var_obj),
                         )
                     )
 
@@ -779,7 +809,7 @@ class Analysis:
                     TaintedVar(
                         param,
                         TaintConfidence.Tainted,
-                        function_node.start,
+                        self.find_first_var_use(function_node, var_obj),
                     )
                 )
 
@@ -980,12 +1010,6 @@ class Analysis:
                             continue
 
                 # Map variables written to the variables read in the current instruction
-                # print(type(loc), loc)
-                if hasattr(loc.src, "operation") and loc.src.operation == int(
-                    MediumLevelILOperation.MLIL_ADD
-                ):
-                    continue
-
                 for var_assignment in loc.vars_written:
                     variable_mapping[var_assignment] = loc.vars_read
 
@@ -1036,7 +1060,7 @@ class Analysis:
 
             llil_instr = origin_function.get_llil_at(matching_obj.loc_address).mlil
 
-            if (
+            if llil_instr.src.operation != int(MediumLevelILOperation.MLIL_VAR) and (
                 llil_instr.operation not in read_write_ops
                 or hasattr(llil_instr, "src")
                 and llil_instr.src.operation not in read_write_ops
@@ -1046,7 +1070,6 @@ class Analysis:
                 continue
 
             tainted_parameters.add(var)
-
         if len(tainted_parameters) > 1:
             tainted_param_map[list(tainted_parameters)[0]] = list(
                 set(tainted_parameters)
