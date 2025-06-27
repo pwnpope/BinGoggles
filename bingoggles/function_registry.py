@@ -4,31 +4,47 @@ from typing import Union
 modeled_functions = [
     FunctionModel("strcpy", [1], [0], True),
     FunctionModel("strncpy", [1], [0], True),
-    FunctionModel("memcpy", [1], [0], True),
+    FunctionModel("stpcpy", [1], [0], True),
+    FunctionModel("strlcpy", [1], [0], True),
     FunctionModel("wcscpy", [1], [0], True),
+    FunctionModel("wcsncpy", [1], [0], True),
+    FunctionModel("memcpy", [1], [0], True),
+    FunctionModel("memmove", [1], [0], True),
+    FunctionModel("wmemcpy", [1], [0], True),
+
+    FunctionModel("strcat", [1], [0], True),
+    FunctionModel("strncat", [1], [0], True),
+    FunctionModel("strlcat", [1], [0], True),
+    FunctionModel("wcscat", [1], [0], True),
+    FunctionModel("wcsncat", [1], [0], True),
+
     FunctionModel("fgets", [2], [0], True),
     FunctionModel("read", [0], [1], True),
     FunctionModel("recv", [0], [1], True),
     FunctionModel("gets", [], [0], True),
     FunctionModel("strlen", [0], [], True),
-    FunctionModel(
-        name="realloc",
-        taint_sources=[0],
-        taint_destinations=[],
-        taints_return=True,
-    ),
+    FunctionModel("realloc", [0], [], True),
     FunctionModel("getdelim", [3], [0], True),
     FunctionModel("getline", [2], [0], True),
-    FunctionModel("sscanf", [0], [2], False),
-    FunctionModel("scanf", [], [1], False),
-    FunctionModel(
-        name="snprintf",
-        taint_sources=[],
-        taint_destinations=[0],
-        taints_return=True,
-        taints_varargs=True,
-        vararg_start_index=3,
-    ),
+
+    FunctionModel("scanf", [], [], False, True, 1),
+    FunctionModel("fscanf", [], [], False, True, 2),
+    FunctionModel("sscanf", [0], [2], False, True, 2),
+    FunctionModel("vscanf", [], [], False, True, 1),
+    FunctionModel("vfscanf", [], [], False, True, 3),
+    FunctionModel("vsscanf", [0], [2], False, True, 2),
+
+    FunctionModel("wprintf", [], [0], True, True, 1),
+    FunctionModel("fwprintf", [], [0], True, True, 2),
+    FunctionModel("swprintf", [], [0], True, True, 3),
+    FunctionModel("vwprintf", [], [0], True, True, 2),
+    FunctionModel("vfwprintf", [], [0], True, True, 3),
+    FunctionModel("vswprintf", [], [0], True, True, 3),
+
+    FunctionModel("snprintf", [], [0], True, True, 3),
+    FunctionModel("sprintf", [], [0], True, True, 2),
+    FunctionModel("vsprintf", [], [0], True, True, 2),
+
 ]
 
 

@@ -16,7 +16,7 @@ from binaryninja.enums import MediumLevelILOperation
 from binaryninja import BinaryView
 from collections import OrderedDict
 from typing import List, Union
-from function_registry import get_modeled_function_index
+from function_registry import get_modeled_function_index, modeled_functions
 
 
 class Analysis:
@@ -27,29 +27,33 @@ class Analysis:
         libraries_mapped: dict = None,
     ):
         """
-        Performs interprocedural variable flow and taint analysis using Binary Ninja's MLIL and HLIL.
+        Performs interprocedural taint and variable flow analysis using Binary Ninja's IL representations.
 
-        This class powers core features of BinGoggles such as forward/backward slicing, taint propagation,
-        interprocedural variable tracking, and detection of tainted function parameters or return values.
-        It supports analysis of global variables, function parameters, struct members, and imported functions.
+        The `Analysis` class serves as the central engine for BinGoggles. It provides both intra-procedural and inter-procedural
+        variable taint propagation capabilities across variables, struct members, globals, and imported functions.
+
+        It supports full-function taint tracing, cross-function taint mapping (calls and returns), and custom modeling of
+        common library calls. This enables use cases such as:
+
+            - Detecting if a return value is influenced by a tainted parameter
+            - Tracing variable flows through dereferences, field offsets, or across stack frames
+            - Analyzing modeled/builtin/imported library calls for known behavior
+            - Producing forward/backward slices on variables, globals, or struct members
 
         Attributes:
             bv (BinaryView): The Binary Ninja view object for the binary under analysis.
-            verbose (bool): Enables verbose logging for debugging and visibility.
-            libraries_mapped (dict): Optional mapping of library BinaryViews for analyzing imported functions.
+            verbose (bool): Enables verbose logging output.
+            libraries_mapped (dict): Optional dictionary of mapped library views for imported function analysis.
+            glob_refs_memoized (dict): Memoized cache for global references (used internally).
 
         Methods:
-            get_sliced_calls(data, func_name, propagated_vars) -> dict | None:
-                Identifies function calls in the slice where tainted variables are passed as arguments.
-
-            tainted_slice(target, var_type, output, slice_type) -> tuple[list, str, list[Variable]] | None:
-                Performs forward or backward taint slicing on the specified variable within its function.
-
-            complete_slice(target, var_type, slice_type, output, analyze_imported_functions) -> dict:
-                Traces taint propagation across functions, forming a complete variable flow graph-like structure.
-
-            trace_function_taint(function_node, tainted_params, ...) -> InterprocTaintResult:
-                Recursively determines whether a function's parameters or return value become tainted.
+            - tainted_slice(...): Produce a forward/backward intra-procedural slice.
+            - complete_slice(...): Perform interprocedural taint propagation across function calls.
+            - trace_function_taint(...): Analyze a function to determine if taint propagates to return or other params.
+            - get_sliced_calls(...): Extract tainted function calls from a taint slice.
+            - find_first_var_use(...): Find first instruction where a variable is read or written in SSA form.
+            - resolve_function_type(...): Classify a call destination as imported, builtin, or neither.
+            - analyze_function_taint(...): Analyze imported or modeled functions for taint propagation.
         """
         self.bv = binaryview
         self.verbose = verbose
@@ -1046,30 +1050,47 @@ class Analysis:
         # Extract underlying variables from TaintedVar before walking the mapping.
         underlying_tainted = {tv.variable for tv in tainted_variables}
         underlying_tainted_object = {tv for tv in tainted_variables}
+        
+        #:DEBUG
+        from pprint import pprint
+
+        pprint(underlying_tainted)
+        print(f"\n{'='*100}")
+        pprint(underlying_tainted_object)
+        print(f"\n{'='*100}")
+        pprint(variable_mapping)
+        print(f"\n{'='*100}")
+        pprint(tainted_variables)
+        print(f"\n{'='*100}")
 
         # Determine all parameters that are tainted by walking through the variable mapping.
         for var in walk_variable(variable_mapping, underlying_tainted):
             if var.name not in [param.name for param in origin_function.parameter_vars]:
+                print("we skipped this var: ", var)
                 continue
 
             matching_obj = next(
                 (tv for tv in underlying_tainted_object if tv.variable == var), None
             )
+
             if not matching_obj:
+                print("couldn't find match: ", var)
                 continue
 
-            llil_instr = origin_function.get_llil_at(matching_obj.loc_address).mlil
+            mlil_instr = origin_function.get_llil_at(matching_obj.loc_address).mlil
 
-            if llil_instr.src.operation != int(MediumLevelILOperation.MLIL_VAR) and (
-                llil_instr.operation not in read_write_ops
-                or hasattr(llil_instr, "src")
-                and llil_instr.src.operation not in read_write_ops
-                or hasattr(llil_instr, "dest")
-                and llil_instr.dest.operation not in read_write_ops
+            if mlil_instr.src.operation != int(MediumLevelILOperation.MLIL_VAR) and (
+                mlil_instr.operation not in read_write_ops
+                or hasattr(mlil_instr, "src")
+                and mlil_instr.src.operation not in read_write_ops
+                or hasattr(mlil_instr, "dest")
+                and mlil_instr.dest.operation not in read_write_ops
             ):
+                print("we skipped: ", var)
                 continue
 
             tainted_parameters.add(var)
+
         if len(tainted_parameters) > 1:
             tainted_param_map[list(tainted_parameters)[0]] = list(
                 set(tainted_parameters)

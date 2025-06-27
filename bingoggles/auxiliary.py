@@ -13,7 +13,6 @@ from typing import Sequence, Dict, Tuple, Optional, Union
 from bingoggles_types import *
 from binaryninja.enums import MediumLevelILOperation, SymbolType
 from binaryninja import BinaryView, Symbol
-from function_registry import modeled_functions, get_function_model
 
 
 def flat(
