@@ -1,6 +1,6 @@
 # BinGoggles: The Assumed Taint Analysis Engine
 
-<img src="images/logo.jpeg" alt="BinGoggles" width="700" height="500"/>
+<img src="images/logo.jpeg" alt="BinGoggles" width="700" height="700"/>
 
 BinGoggles is a static taint analysis framework for Binary Ninja. It tracks variable flow both *within* and *across* functions supporting full inter/intraprocedural slicing, including globals, structs, and function parameters.
 
