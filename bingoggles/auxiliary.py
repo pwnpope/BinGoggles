@@ -13,6 +13,7 @@ from typing import Sequence, Dict, Tuple, Optional, Union
 from bingoggles_types import *
 from binaryninja.enums import MediumLevelILOperation, SymbolType
 from binaryninja import BinaryView, Symbol
+from functools import cache
 
 
 def flat(
@@ -53,6 +54,7 @@ def flat(
     return flat_list
 
 
+@cache
 def get_symbol_from_const_ptr(
     bv: BinaryView, const_ptr: MediumLevelILConstPtr
 ) -> Optional[Symbol]:
@@ -74,74 +76,67 @@ def get_symbol_from_const_ptr(
     return None
 
 
+@cache
 def get_struct_field_refs(
     bv: BinaryView, tainted_struct_member: TaintedStructMember
 ) -> List[MediumLevelILInstruction]:
     """
-    Find all MLIL instructions that reference a specific struct-member offset.
+    Retrieve all MLIL instructions that access a specific struct member field.
 
-    This function collects both HLIL-derived and direct MLIL use-sites where a given
-    struct member (identified by its base variable and byte offset) is read or written.
-
-    It first gathers HLIL variable references to the structs base variable, then
-    inspects each HLIL instructions operands for dereference or field operations
-    matching the target offset. Finally, it converts those HLIL sites back to MLIL
-    instructions and appends any direct MLIL references to the struct member.
+    This function scans the MLIL of the function containing the provided struct member taint,
+    identifying instructions that read from or write to the specific field.
 
     Args:
-        bv (BinaryView): The BinaryView in which to search for the struct references.
+        bv (BinaryView):
+            The BinaryView object containing the binary analysis state.
         tainted_struct_member (TaintedStructMember):
-            A `TaintedStructMember` containing:
-            - `loc_address`: the address where the struct member was first tainted,
-            - `hlil_var`: the HLIL variable object representing the struct,
-            - `offset`: the byte offset of the field within the struct.
+            The struct member of interest, containing:
+                - loc_address (int): address where the field was first tainted.
+                - member (str): name of the struct field.
+                - offset (int): byte offset of the field within the struct.
+                - hlil_var (Variable): HLIL variable representing the base struct object.
+                - variable (Variable): MLIL variable representing the struct base in MLIL.
+                - confidence_level (TaintConfidence): confidence level of taint propagation.
 
     Returns:
         List[MediumLevelILInstruction]:
-            A list of MLIL instructions that access the specified struct member,
-            combining those found via HLIL operand traversal and direct MLIL variable refs.
+            A list of MLIL instructions that access (read or write) the specified struct member field.
     """
-    print('aaa', tainted_struct_member)
-
-    def traverse_operand(op):
-        if not isinstance(op, HighLevelILInstruction):
-            return False
-
-        if (
-            op.operation
-            in {
-                int(HighLevelILOperation.HLIL_DEREF_FIELD),
-                int(HighLevelILOperation.HLIL_STRUCT_FIELD),
-            }
-            and op.offset == tainted_struct_member.offset
-        ):
-            return True
-
-        return False
-
-    hlil_use_sites = set()
-
     func_object = bv.get_functions_containing(tainted_struct_member.loc_address)[0]
-    print("we're going to trace: ", tainted_struct_member.hlil_var, tainted_struct_member.variable)
-    var_refs_hlil = func_object.get_hlil_var_refs(tainted_struct_member.hlil_var)
-    var_refs_mlil = func_object.get_mlil_var_refs(tainted_struct_member.variable)
+    mlil_use_sites = set()
+    struct_ops = [
+        int(MediumLevelILOperation.MLIL_LOAD_STRUCT),
+        int(MediumLevelILOperation.MLIL_VAR_FIELD),
+        int(MediumLevelILOperation.MLIL_STORE_STRUCT),
+    ]
 
-    for ref in var_refs_hlil:
-        instr = func_object.get_llil_at(ref.address).hlil
-        operands = flat(instr.operands)
-        for op in operands:
-            if traverse_operand(op):
-                hlil_use_sites.add(instr)
-                break
+    for block in func_object.mlil:
+        for instr_mlil in block:
+            if (
+                instr_mlil.operation in struct_ops
+                or hasattr(instr_mlil, "src")
+                and hasattr(instr_mlil.src, "operation")
+                and instr_mlil.src.operation in struct_ops
+            ):
+                if instr_mlil.operation == int(
+                    MediumLevelILOperation.MLIL_STORE_STRUCT
+                ):
+                    if instr_mlil.offset == tainted_struct_member.offset:
+                        mlil_use_sites.add(instr_mlil)
 
-    mlil_use_sites = []
-    mlil_use_sites.extend(
-        [func_object.get_llil_at(i.address).mlil for i in hlil_use_sites]
-    )
-    mlil_use_sites.extend(var_refs_mlil)
+                elif instr_mlil.src.operation == int(
+                    MediumLevelILOperation.MLIL_LOAD_STRUCT
+                ):
+                    if instr_mlil.src.offset == tainted_struct_member.offset:
+                        mlil_use_sites.add(instr_mlil)
 
-    # print(mlil_use_sites)
-    return mlil_use_sites
+                elif instr_mlil.src.operation == int(
+                    MediumLevelILOperation.MLIL_VAR_FIELD
+                ):
+                    if instr_mlil.src.offset == tainted_struct_member.offset:
+                        mlil_use_sites.add(instr_mlil)
+
+    return list(mlil_use_sites)
 
 
 def param_var_map(
@@ -288,6 +283,7 @@ def get_struct_field_name(loc: MediumLevelILInstruction):
     raise ValueError(f"[Error] Could not find struct member name in LOC: {loc}")
 
 
+@cache
 def get_mlil_glob_refs(
     analysis, function_object: Function, var_to_trace: TaintedGlobal
 ) -> list:
@@ -648,7 +644,11 @@ def trace_tainted_variable(
                     if offset_var_taintedvar:
                         vars_found.append(
                             TaintedAddressOfField(
-                                variable=addr_var,
+                                variable=(
+                                    addr_var
+                                    if isinstance(addr_var, Variable)
+                                    else addr_var.var
+                                ),
                                 offset=offset,
                                 offset_var=offset_var_taintedvar,
                                 confidence_level=TaintConfidence.Tainted,

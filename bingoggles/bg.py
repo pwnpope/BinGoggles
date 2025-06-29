@@ -358,7 +358,7 @@ class Analysis:
                             member=target.variable,
                             offset=struct_offset,
                             hlil_var=base_var,
-                            variable=instr_mlil.src.src,
+                            variable=instr_mlil.dest,
                             confidence_level=TaintConfidence.Tainted,
                         )
 
@@ -502,6 +502,7 @@ class Analysis:
             for s in self.bv.get_symbols_of_type(SymbolType.ImportedFunctionSymbol)
         }
 
+        @cache
         def _recurse_slice(
             func_name: str,
             variable,
@@ -1050,7 +1051,7 @@ class Analysis:
         # Extract underlying variables from TaintedVar before walking the mapping.
         underlying_tainted = {tv.variable for tv in tainted_variables}
         underlying_tainted_object = {tv for tv in tainted_variables}
-        
+
         #:DEBUG
         from pprint import pprint
 
@@ -1064,30 +1065,39 @@ class Analysis:
         print(f"\n{'='*100}")
 
         # Determine all parameters that are tainted by walking through the variable mapping.
+
+        # tainted_parameters.update(
+        #     var
+        #     for var in walk_variable(variable_mapping, underlying_tainted)
+        #     if var.name in [param.name for param in origin_function.parameter_vars if isinstance(param, MediumLevelILVarSsa)]
+        # )
+
         for var in walk_variable(variable_mapping, underlying_tainted):
+            if isinstance(var, MediumLevelILVarSsa):
+                var = var.var
+
             if var.name not in [param.name for param in origin_function.parameter_vars]:
-                print("we skipped this var: ", var)
                 continue
 
-            matching_obj = next(
-                (tv for tv in underlying_tainted_object if tv.variable == var), None
-            )
+            # matching_obj = next(
+            #     (tv for tv in underlying_tainted_object if tv.variable == var), None
+            # )
 
-            if not matching_obj:
-                print("couldn't find match: ", var)
-                continue
+            # if not matching_obj:
+            #     print("couldn't find match: ", var)
+            #     continue
 
-            mlil_instr = origin_function.get_llil_at(matching_obj.loc_address).mlil
+            # mlil_instr = origin_function.get_llil_at(matching_obj.loc_address).mlil
 
-            if mlil_instr.src.operation != int(MediumLevelILOperation.MLIL_VAR) and (
-                mlil_instr.operation not in read_write_ops
-                or hasattr(mlil_instr, "src")
-                and mlil_instr.src.operation not in read_write_ops
-                or hasattr(mlil_instr, "dest")
-                and mlil_instr.dest.operation not in read_write_ops
-            ):
-                print("we skipped: ", var)
-                continue
+            # if mlil_instr.src.operation != int(MediumLevelILOperation.MLIL_VAR) and (
+            #     mlil_instr.operation not in read_write_ops
+            #     or hasattr(mlil_instr, "src")
+            #     and mlil_instr.src.operation not in read_write_ops
+            #     or hasattr(mlil_instr, "dest")
+            #     and mlil_instr.dest.operation not in read_write_ops
+            # ):
+            #     print("we skipped: ", var)
+            #     continue
 
             tainted_parameters.add(var)
 
@@ -1106,7 +1116,10 @@ class Analysis:
                 if any of them are the return variable, the return variable is tainted.
             """
             if loc:
-                var_use_sites = t_var.variable.use_sites
+                try:
+                    var_use_sites = t_var.variable.use_sites
+                except:
+                    var_use_sites = t_var.variable.var.use_sites
 
                 for use_site in var_use_sites:
                     if isinstance(use_site, MediumLevelILRet):
