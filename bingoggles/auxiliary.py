@@ -11,6 +11,7 @@ from binaryninja.highlevelil import HighLevelILOperation, HighLevelILInstruction
 from colorama import Fore
 from typing import Sequence, Dict, Tuple, Optional, Union
 from .bingoggles_types import *
+from .function_registry import modeled_functions_names
 from binaryninja.enums import MediumLevelILOperation, SymbolType
 from binaryninja import BinaryView, Symbol
 from functools import cache
@@ -208,8 +209,8 @@ def func_name_to_object(bv: BinaryView, func_name: str) -> int | None:
 
 
 def is_address_of_field_offset_match(
-    mlil_instr: MediumLevelILInstruction, var_to_trace: TaintedAddressOfField
-):
+    mlil_instr: MediumLevelILInstruction, var_to_trace: TaintedVarOffset
+) -> bool:
     """
     Checks if the given instruction's destination or source contains an address of
     field with the same variable `var_to_trace`.
@@ -221,7 +222,7 @@ def is_address_of_field_offset_match(
     Args:
         mlil_instr (MediumLevelILInstruction): The instruction to analyze, which
                                                 contains destination and source operands.
-        var_to_trace (TaintedAddressOfField): The tainted variable containing the offset
+        var_to_trace (TaintedVarOffset): The tainted variable containing the offset
                                                 to match against the instruction's operands.
 
     Returns:
@@ -392,7 +393,7 @@ def trace_tainted_variable(
         tuple[list, list] | None:
             - A tuple containing two lists:
                 1. List of TaintedLOC objects representing MLIL instructions where the variable was used or affected.
-                2. List of TaintedVar (or TaintedAddressOfField) objects that were traced during the analysis.
+                2. List of TaintedVar (or TaintedVarOffset) objects that were traced during the analysis.
             - Returns None if the trace cannot be performed (e.g., variable not found or invalid trace type).
     """
     collected_locs: list[TaintedLOC] = []
@@ -401,7 +402,7 @@ def trace_tainted_variable(
     def get_connected_var(
         function_object: Function,
         target_variable: (
-            TaintedVar | TaintedGlobal | TaintedAddressOfField | TaintedStructMember
+            TaintedVar | TaintedGlobal | TaintedVarOffset | TaintedStructMember
         ),
     ) -> Variable | None:
         """
@@ -409,7 +410,7 @@ def trace_tainted_variable(
         """
         connected_candidates = []
 
-        if isinstance(target_variable, (TaintedVar, TaintedAddressOfField)):
+        if isinstance(target_variable, (TaintedVar, TaintedVarOffset)):
             refs = function_object.get_mlil_var_refs(target_variable.variable)
 
             for ref in refs:
@@ -489,7 +490,7 @@ def trace_tainted_variable(
         elif isinstance(v, TaintedStructMember):
             return str(v.member)
 
-        elif isinstance(v, TaintedAddressOfField):
+        elif isinstance(v, TaintedVarOffset):
             return v.name
 
         else:
@@ -550,7 +551,7 @@ def trace_tainted_variable(
                     continue
 
             # see if the var to trace is used as a pointer to an array or something, typical for MLIL_STORE/MLIL_LOAD type operations
-            if isinstance(var_to_trace, TaintedAddressOfField):
+            if isinstance(var_to_trace, TaintedVarOffset):
                 if not is_address_of_field_offset_match(instr_mlil, var_to_trace):
                     continue
 
@@ -643,7 +644,7 @@ def trace_tainted_variable(
 
                     if offset_var_taintedvar:
                         vars_found.append(
-                            TaintedAddressOfField(
+                            TaintedVarOffset(
                                 variable=(
                                     addr_var
                                     if isinstance(addr_var, Variable)
@@ -660,7 +661,7 @@ def trace_tainted_variable(
                     elif offset_variable:
                         try:
                             vars_found.append(
-                                TaintedAddressOfField(
+                                TaintedVarOffset(
                                     variable=address_variable,
                                     offset=offset,
                                     offset_var=TaintedVar(
@@ -680,7 +681,7 @@ def trace_tainted_variable(
                             )
                             if glob_symbol:
                                 vars_found.append(
-                                    TaintedAddressOfField(
+                                    TaintedVarOffset(
                                         variable=address_variable,
                                         offset=offset,
                                         offset_var=TaintedGlobal(
@@ -698,7 +699,7 @@ def trace_tainted_variable(
 
                     else:
                         vars_found.append(
-                            TaintedAddressOfField(
+                            TaintedVarOffset(
                                 variable=(
                                     addr_var
                                     if isinstance(addr_var, Variable)
@@ -812,7 +813,7 @@ def trace_tainted_variable(
                                             vars_found.append(
                                                 TaintedVar(
                                                     t_var,
-                                                    TaintConfidence.Tainted,
+                                                    var_to_trace.confidence_level,
                                                     instr_mlil.address,
                                                 )
                                             )
@@ -987,7 +988,7 @@ def trace_tainted_variable(
 
                         if offset_var_taintedvar:
                             vars_found.append(
-                                TaintedAddressOfField(
+                                TaintedVarOffset(
                                     variable=address_variable,
                                     offset=None,
                                     offset_var=offset_var_taintedvar[0],

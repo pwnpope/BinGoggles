@@ -62,13 +62,13 @@ class Analysis:
 
         if self.verbose:
             self.trace_function_taint_printed = False
-
+    @cache
     def get_sliced_calls(
         self,
         data: List[TaintedLOC],
         func_name: str,
         propagated_vars: List[
-            Union[TaintedVar, TaintedGlobal, TaintedAddressOfField, TaintedStructMember]
+            Union[TaintedVar, TaintedGlobal, TaintedVarOffset, TaintedStructMember]
         ],
     ) -> dict | None:
         """
@@ -82,7 +82,7 @@ class Analysis:
         Args:
             data (List[TaintedLOC]): The list of locations visited during the taint slice.
             func_name (str): The name of the function being analyzed.
-            propagated_vars (List[Union[TaintedVar, TaintedGlobal, TaintedAddressOfField, TaintedStructMember]]):
+            propagated_vars (List[Union[TaintedVar, TaintedGlobal, TaintedVarOffset, TaintedStructMember]]):
                 The list of tainted variables that were propagated during the slice.
 
         Returns:
@@ -681,6 +681,7 @@ class Analysis:
                     return instr.address
         return None
 
+    @cache
     def trace_function_taint(
         self,
         function_node: int | Function,
@@ -874,7 +875,7 @@ class Analysis:
 
                         if offset_var_taintedvar:
                             tainted_variables.add(
-                                TaintedAddressOfField(
+                                TaintedVarOffset(
                                     variable=addr_var,
                                     offset=offset,
                                     offset_var=offset_var_taintedvar,
@@ -886,7 +887,7 @@ class Analysis:
 
                         elif offset_variable:
                             tainted_variables.add(
-                                TaintedAddressOfField(
+                                TaintedVarOffset(
                                     variable=addr_var,
                                     offset=offset,
                                     offset_var=TaintedVar(
@@ -902,7 +903,7 @@ class Analysis:
 
                         else:
                             tainted_variables.add(
-                                TaintedAddressOfField(
+                                TaintedVarOffset(
                                     variable=(
                                         addr_var
                                         if isinstance(addr_var, Variable)
@@ -1133,6 +1134,7 @@ class Analysis:
             target_function_params=origin_function.parameter_vars,
         )
 
+    @cache
     def resolve_function_type(
         self, instr_mlil: MediumLevelILInstruction
     ) -> tuple[str, str | Symbol | None]:
@@ -1173,6 +1175,7 @@ class Analysis:
 
         return None
 
+    @cache
     def analyze_function_taint(
         self, func_symbol: Union[Symbol, str], tainted_param: Variable
     ) -> Union[InterprocTaintResult, FunctionModel, None]:

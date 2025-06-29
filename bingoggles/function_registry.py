@@ -52,6 +52,7 @@ modeled_functions = [
     FunctionModel("swscanf", [0], [2], False, True, 2),
 ]
 
+modeled_functions_names = [i.name for i in modeled_functions]
 
 def get_modeled_function_index(name: str) -> int | None:
     """

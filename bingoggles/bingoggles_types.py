@@ -188,7 +188,7 @@ class OutputMode:
 
 
 @dataclass
-class TaintedAddressOfField:
+class TaintedVarOffset:
     """
     Used for tracking and holding data for variables from within MLIL_STORE/MLIL_LOAD operations
     """
@@ -211,7 +211,7 @@ class TaintedAddressOfField:
         self.name = str(variable)
 
     def __eq__(self, other):
-        if not isinstance(other, TaintedAddressOfField):
+        if not isinstance(other, TaintedVarOffset):
             return False
         return (
             self.variable == other.variable
@@ -576,7 +576,7 @@ class TaintedLOC:
     Attributes:
         loc (MediumLevelILInstruction): The MLIL instruction involved in the tainted operation.
         addr (int): The address of the instruction in the binary.
-        target_var (Union[TaintedVar, TaintedAddressOfField, TaintedGlobal, TaintedStructMember]):
+        target_var (Union[TaintedVar, TaintedVarOffset, TaintedGlobal, TaintedStructMember]):
             The variable being tracked as tainted at this instruction.
         propagated_var (Variable | None): The variable from which the taint originated, if applicable.
         taint_confidence (TaintConfidence): The confidence level (Tainted, MaybeTainted, NotTainted).
@@ -588,7 +588,7 @@ class TaintedLOC:
         loc: MediumLevelILInstruction,  # Line of code
         addr: int,  # Address of the LOC
         target_var: (
-            TaintedVar | TaintedAddressOfField | TaintedGlobal | TaintedStructMember
+            TaintedVar | TaintedVarOffset | TaintedGlobal | TaintedStructMember
         ),  # Target variable that we found this LOC with, (the variable we're tracking)
         propagated_var: (
             Variable | None
@@ -598,7 +598,7 @@ class TaintedLOC:
     ):
         self.loc: MediumLevelILInstruction = loc
         self.target_var: (
-            TaintedVar | TaintedAddressOfField | TaintedGlobal | TaintedStructMember
+            TaintedVar | TaintedVarOffset | TaintedGlobal | TaintedStructMember
         ) = target_var
         self.propagated_var: Variable | None = propagated_var
         self.taint_confidence: TaintConfidence = taint_confidence

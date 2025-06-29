@@ -14,7 +14,8 @@ Getting Started
    .. bingoggles.auxiliary
    .. bingoggles.bingoggles_types
    .. bingoggles.modules
-   .. bingoggles.vfa
+   .. bingoggles.bg
+   .. bingoggles.function_registry
 
 
 Module Reference
@@ -50,10 +51,18 @@ bingoggles.modules module
    :undoc-members:
    :show-inheritance:
 
-bingoggles.vfa module
+bingoggles.bg module
 ---------------------
 
-.. automodule:: bingoggles.vfa
+.. automodule:: bingoggles.bg
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+bingoggles.function_registry module
+---------------------
+
+.. automodule:: bingoggles.function_registry
    :members:
    :undoc-members:
    :show-inheritance:
