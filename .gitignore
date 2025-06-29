@@ -16,3 +16,4 @@ pytest.ini
 docs/*
 build/*
 test/buildroot
+bingoggles/test.py
