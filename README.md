@@ -43,24 +43,19 @@ $ pip install -e .
 - Before running this you obviously need to install and configure hugsy headless. 
 ```python
 from bingoggles.bingoggles_types import *
-from os import abspath
+from bingoggles.bg import Analysis
 
-test_bin = "./test/binaries/bin/test_mlil_store"
-bg_init = BGInitRpyc(
-    target_bin=abspath(test_bin),
-    libraries=["/lib/x86_64-linux-gnu/libc.so.6"],
-    host="127.0.0.1",
-    port=18812,
-)
+test_bin_path = "/home/pope/dev/BinGoggles/test/binaries/bin/test_mlil_store"
+bg_init = BGInitRpyc(target_bin=test_bin_path)
 
-bn, bv, libraries_mapped = bg_init.init()
+bv, libraries_mapped = bg_init.init()
 
 analysis = Analysis(
-    binaryview=bv, binaryninja=bn, verbose=True, libraries_mapped=libraries_mapped
+    binaryview=bv, verbose=True, libraries_mapped=libraries_mapped
 )
 
 analysis.tainted_slice(
-    target=TaintTarget(0x00401212, "rdi"),
+    target=TaintTarget(0x08049258, "eax_7"),
     var_type=SlicingID.FunctionVar,
 )
 ```

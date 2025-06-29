@@ -10,7 +10,7 @@ from binaryninja.mediumlevelil import (
 from binaryninja.highlevelil import HighLevelILOperation, HighLevelILInstruction
 from colorama import Fore
 from typing import Sequence, Dict, Tuple, Optional, Union
-from bingoggles_types import *
+from .bingoggles_types import *
 from binaryninja.enums import MediumLevelILOperation, SymbolType
 from binaryninja import BinaryView, Symbol
 from functools import cache

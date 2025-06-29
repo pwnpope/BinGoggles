@@ -10,13 +10,13 @@ from binaryninja.enums import SymbolType
 from functools import cache
 from colorama import Fore
 
-from bingoggles_types import *
-from auxiliary import *
+from .bingoggles_types import *
+from .auxiliary import *
 from binaryninja.enums import MediumLevelILOperation
 from binaryninja import BinaryView
 from collections import OrderedDict
 from typing import List, Union
-from function_registry import get_modeled_function_index, modeled_functions
+from .function_registry import get_modeled_function_index, modeled_functions
 
 
 class Analysis:

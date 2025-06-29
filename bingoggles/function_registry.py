@@ -1,4 +1,4 @@
-from bingoggles_types import FunctionModel
+from .bingoggles_types import FunctionModel
 from typing import Union
 
 modeled_functions = [

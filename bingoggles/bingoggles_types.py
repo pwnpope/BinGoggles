@@ -291,11 +291,9 @@ class TaintedAddressOfField:
 
 
 class BGInit:
-    def __init__(
-        self,
-        target_bin: str,
-        libraries: list,
-    ):
+    def __init__(self, target_bin: str, libraries: list = None):
+        if libraries is None:
+            libraries = []
         self.target_bin = target_bin
         self.libraries = libraries
         self.cache_folder_name = "bg_cache"
@@ -398,19 +396,20 @@ class BGInitRpyc(BGInit):
     of the BinGoggles state for performing binary analysis, caching results, and loading the
     necessary libraries.
     """
-
     def __init__(
         self,
         target_bin: str,
-        libraries: list,
+        libraries: list = None,
         host: str = "127.0.0.1",
         port: int = 18812,
         timeout: int = 520,
     ):
-        super().__init__(target_bin, libraries)
+        if libraries is None:
+            libraries = []
+        super().__init__(target_bin=target_bin, libraries=libraries)
         self.host = host
         self.port = port
-        self.timeout = timeout * len(libraries) if self.libraries else 1
+        self.timeout = timeout * len(libraries) if libraries else 1
 
     def _api_connect(self):
         try:
