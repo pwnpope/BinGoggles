@@ -410,7 +410,7 @@ class BGInitRpyc(BGInit):
         super().__init__(target_bin, libraries)
         self.host = host
         self.port = port
-        self.timeout = timeout * len(libraries)
+        self.timeout = timeout * len(libraries) if self.libraries else 1
 
     def _api_connect(self):
         try:
