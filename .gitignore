@@ -17,3 +17,4 @@ docs/*
 build/*
 test/buildroot
 bingoggles/test.py
+roadmap.md

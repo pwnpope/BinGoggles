@@ -20,9 +20,6 @@ A **complete slice** traces a tainted variable's full journey through function c
 - [x] **Embedded-friendly** – Well-suited for firmware and embedded target analysis
 - [x] **Headless compatible** – Supports both Hugsy’s and Binary Ninja’s headless modes
 
-## Limitations
-- Purely static analysis
-
 ## Install
 #### A) Setup python virtual environment
 ```bash
