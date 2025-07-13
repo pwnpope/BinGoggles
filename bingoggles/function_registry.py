@@ -50,9 +50,12 @@ modeled_functions = [
     FunctionModel("sprintf", [], [0], True, True, 2),
     FunctionModel("vsprintf", [], [0], True, True, 2),
     FunctionModel("swscanf", [0], [2], False, True, 2),
+    # we're adding functions here that dont taint anything, we dont want to do any analysis on them.
+    FunctionModel("printf", [], [], False, False),
 ]
 
 modeled_functions_names = [i.name for i in modeled_functions]
+
 
 def get_modeled_function_index(name: str) -> int | None:
     """

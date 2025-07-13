@@ -27,6 +27,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+
 @lru_cache(maxsize=None)
 def find_dir(root_path: str, target_name: str) -> str | None:
     """
@@ -49,6 +50,7 @@ def find_dir(root_path: str, target_name: str) -> str | None:
 bingoggles_path = Path(__file__).parent
 uclibc_path = str(bingoggles_path / "buildroot/output/target/lib/libc.so.0")
 
+
 def test_backwards_slice_var(
     bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_mlil_store"
 ):
@@ -60,17 +62,19 @@ def test_backwards_slice_var(
 
     analysis = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
 
-    tainted_locs, func_name, tainted_params = analysis.tainted_slice(
+    tainted_locs, func_name, tainted_vars = analysis.tainted_slice(
         #   26 @ 0804927a  printf("Original Buffer: %s\nEncrypted B…", var_3c, var_38)
         target=TaintTarget(0x0804927A, "var_3c"),
         output=OutputMode.Returned,
         var_type=SlicingID.FunctionVar,
         slice_type=SliceType.Backward,
     )
+
+    pprint(tainted_vars)
     assert len(tainted_locs) > 0, "No tainted locations found"
     assert (
-        len(tainted_locs) == 18
-    ), f"Expected 18 tainted locations, but got {len(tainted_locs)}"
+        len(tainted_locs) == 13
+    ), f"Expected 13 tainted locations, but got {len(tainted_locs)}"
 
 
 def test_fwd_slice_param(
@@ -92,8 +96,8 @@ def test_fwd_slice_param(
 
     assert len(sliced_data) > 0, "No tainted locations found"
     assert (
-        len(sliced_data) == 11
-    ), f"Expected 11 tainted locations, but got {len(sliced_data)}"
+        len(sliced_data) == 16
+    ), f"Expected 16 tainted locations, but got {len(sliced_data)}"
 
 
 def test_fwd_slice_var(
@@ -152,7 +156,7 @@ def test_get_sliced_calls(
         var_type=SlicingID.FunctionVar,
     )
     pprint(propagated_vars)
-    result = analysis.get_sliced_calls(sliced_data, func_name, propagated_vars)
+    result = analysis.get_sliced_calls(tuple(sliced_data), func_name, tuple(propagated_vars))
 
     assert len(result) == 3
 
@@ -610,24 +614,3 @@ def test_interproc_memcpy(
     pprint(tainted_vars)
 
     # 000824f0    int32_t wms_ts_encode_CDMA_OTA(char* arg1, int32_t* arg2)
-
-
-def test(
-    bg_init,
-    test_bin=f"/home/pope/xchglabs/AG35-Research/bin/mbimd.bndb",
-):
-    bg = bg_init(
-        target_bin=abspath(test_bin),
-        libraries=[uclibc_path],
-    )
-    bv, libraries_mapped = bg.init()
-
-    aux = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
-
-    _, _, tainted_vars = aux.tainted_slice(
-        # 000824f0    int32_t wms_ts_encode_CDMA_OTA(char* arg1, int32_t* arg2)
-        target=TaintTarget(0x000824F0, "arg1"),
-        var_type=SlicingID.FunctionParam,
-    )
-
-    pprint(tainted_vars)

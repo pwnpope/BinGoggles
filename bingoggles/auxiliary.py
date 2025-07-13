@@ -6,6 +6,7 @@ from binaryninja.mediumlevelil import (
     MediumLevelILConstPtr,
     MediumLevelILVar,
     MediumLevelILConst,
+    MediumLevelILAddressOf,
 )
 from binaryninja.highlevelil import HighLevelILOperation, HighLevelILInstruction
 from colorama import Fore
@@ -58,7 +59,7 @@ def flat(
 
 @cache
 def get_symbol_from_const_ptr(
-    bv: BinaryView, const_ptr: MediumLevelILConstPtr
+    bv: BinaryView, const_ptr: Union[MediumLevelILConstPtr, Variable, MediumLevelILVar]
 ) -> Optional[Symbol]:
     """
     Resolve a const-pointer operand back to its data symbol.
@@ -231,7 +232,7 @@ def is_address_of_field_offset_match(
         bool: True if the offset in the instruction matches the offset of `var_to_trace`,
               otherwise False.
     """
-    destination, source = mlil_instr.dest, mlil_instr.src
+    destination, source = mlil_instr.dest, mlil_instr.src if hasattr(mlil_instr, "src") else None
 
     if isinstance(destination, list):
         for d in destination:
@@ -568,28 +569,33 @@ def extract_var_use_sites(
 
 
 def skip_instruction(
-    function_object: Function,
     mlil_loc: MediumLevelILInstruction,
-    collected_locs: list,
+    first_mlil_loc: MediumLevelILInstruction,
     var_to_trace: Union[
         TaintedStructMember, TaintedVar, TaintedGlobal, TaintedVarOffset
     ],
     trace_type: SliceType,
 ) -> bool:
     """
-    Determines whether to skip a given MLIL instruction during taint tracing.
+    Determines whether a given MLIL instruction should be skipped during taint tracing.
 
-    Skips if:
-    - Instruction is invalid
-    - Direction mismatch (e.g. forward but instruction occurs earlier)
-    - Offset mismatch for TaintedVarOffset variables
+    This function prevents unnecessary or incorrect propagation by skipping instructions
+    that meet certain criteria, such as being unrelated in control flow, already visited,
+    or mismatched in expected offset or dereference context.
+
+    Skipping occurs when:
+        - The instruction is not part of the function's MLIL
+        - The instruction has already been processed (present in collected_locs)
+        - In forward tracing, the instruction occurs before the first MLIL location
+        - In backward tracing, the instruction occurs after the first MLIL location
+        - When tracking a TaintedVarOffset, if the dereference/offset does not match
 
     Args:
-        function_object: Binary Ninja function context.
-        mlil_loc: Instruction being considered.
-        collected_locs: Previously visited taint locations.
-        var_to_trace: The current tainted variable being tracked.
-        trace_type: Direction of slicing (forward or backward).
+        mlil_loc (MediumLevelILInstruction): The instruction under consideration.
+        first_mlil_loc (MediumLevelILInstruction): The initial instruction that began the trace.
+        var_to_trace (Union[TaintedStructMember, TaintedVar, TaintedGlobal, TaintedVarOffset]):
+            The current variable being traced.
+        trace_type (SliceType): The slicing direction (SliceType.Forward or SliceType.Backward).
 
     Returns:
         bool: True if the instruction should be skipped, False otherwise.
@@ -599,25 +605,19 @@ def skip_instruction(
     if not mlil_loc:
         return True
 
-    # make sure that we're either going backwards or forwards depending on what the caller of the function specified in arguments
     if trace_type == SliceType.Forward:
-        if collected_locs and mlil_loc.instr_index < mlil_loc.instr_index:
-            return True
-
-        if collected_locs and mlil_loc.instr_index < collected_locs[0].loc.instr_index:
+        if mlil_loc.instr_index < first_mlil_loc.instr_index:
             return True
 
     elif trace_type == SliceType.Backward:
-        if collected_locs and mlil_loc.instr_index > mlil_loc.instr_index:
+        if mlil_loc.instr_index > first_mlil_loc.instr_index:
             return True
 
-    # See if the var to trace is used as a pointer to an array or something, typical for MLIL_STORE/MLIL_LOAD type operations
     if isinstance(var_to_trace, TaintedVarOffset):
         if not is_address_of_field_offset_match(mlil_loc, var_to_trace):
             return True
 
     return False
-
 
 def append_tainted_loc(
     function_object: Function,
@@ -628,6 +628,20 @@ def append_tainted_loc(
     ],
     analysis,
 ) -> None:
+    """
+    Append a tainted program location to the list of collected locations.
+
+    Constructs a `TaintedLOC` object from the given MLIL instruction and traced variable,
+    resolves its connected variable, and stores the taint information.
+
+    Args:
+        function_object (Function): The function containing the instruction.
+        collected_locs (List[TaintedLOC]): The running list of collected taint locations.
+        mlil_loc (MediumLevelILInstruction): The MLIL instruction to associate with the taint.
+        var_to_trace (Union[TaintedStructMember, TaintedVar, TaintedGlobal, TaintedVarOffset]):
+            The variable being traced for taint.
+        analysis (Analysis): The analysis engine (BinGoggles `Analysis` class).
+    """
     collected_locs.append(
         TaintedLOC(
             mlil_loc,
@@ -666,7 +680,8 @@ def append_tainted_var_by_type(
         mlil_loc: The MLIL instruction address where the variable was found.
         analysis: The main analysis object providing symbol, taint utilities and binary view.
     """
-    if not isinstance(tainted_var, MediumLevelILConstPtr):
+
+    if isinstance(tainted_var, MediumLevelILVar) or isinstance(tainted_var, Variable):
         var_object = tainted_var.var if hasattr(tainted_var, "var") else tainted_var
         if var_object != var_to_trace.variable:
             vars_found.append(
@@ -679,16 +694,16 @@ def append_tainted_var_by_type(
 
     else:
         glob_symbol = get_symbol_from_const_ptr(analysis.bv, tainted_var)
-
-        vars_found.append(
-            TaintedGlobal(
-                glob_symbol.name,
-                var_to_trace.confidence_level,
-                mlil_loc.address,
-                tainted_var,
-                glob_symbol,
+        if glob_symbol:
+            vars_found.append(
+                TaintedGlobal(
+                    glob_symbol.name,
+                    var_to_trace.confidence_level,
+                    mlil_loc.address,
+                    tainted_var,
+                    glob_symbol,
+                )
             )
-        )
 
 
 def propagate_mlil_store_struct(
@@ -700,6 +715,8 @@ def propagate_mlil_store_struct(
     ],
     vars_found: list,
     analysis,
+    trace_type: SliceType,
+    first_mlil_loc: MediumLevelILInstruction,
 ) -> None:
     """
     Handles propagation for struct-related MLIL_STORE_STRUCT and MLIL_SET_VAR operations.
@@ -714,6 +731,9 @@ def propagate_mlil_store_struct(
         var_to_trace: The current tainted variable being traced.
         vars_found: Worklist of tainted variables to continue tracing.
         analysis: The main analysis object providing symbol, taint utilities and binary view
+        trace_type: Direction of slicing (forward or backward).
+        first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
+            Used for controlling trace range and instruction relevance based on direction.
     """
     struct_offset = mlil_loc.ssa_form.offset
     instr_hlil = function_object.get_llil_at(mlil_loc.address).hlil
@@ -756,9 +776,15 @@ def propagate_mlil_store_struct(
 
             vars_found.append(tainted_struct_member)
 
-    append_tainted_loc(
-        function_object, collected_locs, mlil_loc, var_to_trace, analysis
-    )
+    if not skip_instruction(
+        mlil_loc,
+        first_mlil_loc,
+        var_to_trace,
+        trace_type,
+    ):
+        append_tainted_loc(
+            function_object, collected_locs, mlil_loc, var_to_trace, analysis
+        )
 
 
 def propagate_mlil_store(
@@ -771,7 +797,30 @@ def propagate_mlil_store(
     vars_found: list,
     already_iterated: list,
     analysis,
+    trace_type: SliceType,
+    first_mlil_loc: MediumLevelILInstruction,
 ) -> None:
+    """
+    Handle taint propagation for MLIL_STORE operations.
+
+    This function analyzes a `MLIL_STORE` instruction to extract the base address and potential
+    offset (if present), and determines whether the accessed memory location is influenced by a
+    previously tainted variable or a global. It appends newly discovered tainted variables
+    (as `TaintedVarOffset`) to the taint tracking list and records the instruction location.
+
+    Args:
+        function_object (Function): The function containing the MLIL instruction.
+        mlil_loc (MediumLevelILInstruction): The store instruction being analyzed.
+        collected_locs (list): List of `TaintedLOC` objects visited during this trace.
+        var_to_trace (Union[TaintedStructMember, TaintedVar, TaintedGlobal, TaintedVarOffset]):
+            The variable from which taint is being propagated.
+        vars_found (list): A list that will be updated with newly discovered tainted variables.
+        already_iterated (list): A list of previously visited variables, used to determine taint propagation.
+        analysis (Analysis): The analysis engine (BinGoggles `Analysis` class).
+        trace_type (SliceType): Indicates whether the taint trace is forward or backward.
+        first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
+            Used for controlling trace range and instruction relevance based on direction.
+    """
     address_variable, offset_variable = None, None
     offset_var_taintedvar = None
     addr_var = None
@@ -855,9 +904,15 @@ def propagate_mlil_store(
             )
         )
 
-    append_tainted_loc(
-        function_object, collected_locs, mlil_loc, var_to_trace, analysis
-    )
+    if not skip_instruction(
+        mlil_loc,
+        first_mlil_loc,
+        var_to_trace,
+        trace_type,
+    ):
+        append_tainted_loc(
+            function_object, collected_locs, mlil_loc, var_to_trace, analysis
+        )
 
 
 def analyze_function_model(
@@ -926,7 +981,9 @@ def analyze_function_model(
                         tainted_variables_to_add.add(mlil_loc.params[t_dst_indx])
 
         for t_var in tainted_variables_to_add:
-            append_tainted_var_by_type(t_var, var_to_trace, vars_found, mlil_loc, analysis)
+            append_tainted_var_by_type(
+                t_var, var_to_trace, vars_found, mlil_loc, analysis
+            )
 
         if func_analyzed.taints_return:
             for t_var in mlil_loc.vars_written:
@@ -939,12 +996,18 @@ def analyze_function_model(
         for t_src_indx in func_analyzed.taint_sources:
             for t_dst_indx in func_analyzed.taint_destinations:
                 append_tainted_var_by_type(
-                    mlil_loc.params[t_dst_indx], var_to_trace, vars_found, mlil_loc, analysis
+                    mlil_loc.params[t_dst_indx],
+                    var_to_trace,
+                    vars_found,
+                    mlil_loc,
+                    analysis,
                 )
 
         if func_analyzed.taints_return:
             for t_var in mlil_loc.vars_written:
-                append_tainted_var_by_type(t_var, var_to_trace, vars_found, mlil_loc, analysis)
+                append_tainted_var_by_type(
+                    t_var, var_to_trace, vars_found, mlil_loc, analysis
+                )
 
 
 def analyze_new_imported_function(
@@ -955,6 +1018,24 @@ def analyze_new_imported_function(
     vars_found: list,
     analysis,
 ):
+    """
+    Analyze taint propagation through a call to an imported or otherwise unresolved function.
+
+    This function attempts to trace the effects of taint when a call is made to a new or imported function
+    that is not part of the core binary. It uses interprocedural taint tracing to detect whether:
+      - The return value is tainted
+      - Any parameters passed to the function propagate taint back
+
+    If taint is found, appropriate `TaintedVar` or `TaintedVarOffset` instances are created and added to
+    the `vars_found` list.
+
+    Args:
+        mlil_loc (MediumLevelILInstruction): The MLIL instruction for the function call.
+        var_to_trace (Union[TaintedStructMember, TaintedVar, TaintedGlobal, TaintedVarOffset]):
+            The original variable being traced for taint.
+        vars_found (list): List of new tainted variables discovered via interprocedural analysis.
+        analysis (Analysis): The main `Analysis` object handling taint propagation and resolution.
+    """
     _, tainted_func_param = get_func_param_from_call_param(
         analysis.bv, mlil_loc, var_to_trace
     )
@@ -1001,6 +1082,8 @@ def propagate_mlil_call(
     vars_found: list,
     already_iterated: list,
     analysis,
+    trace_type: SliceType,
+    first_mlil_loc: MediumLevelILInstruction,
 ) -> None:
     """
     Handles taint propagation for MLIL function call instructions.
@@ -1018,6 +1101,9 @@ def propagate_mlil_call(
         vars_found (list): The queue of tainted variables pending further analysis.
         already_iterated (list): Set of already processed tainted variables (to prevent loops).
         analysis (Analysis): The analysis engine (BinGoggles `Analysis` class).
+        trace_type (SliceType): Indicates whether the taint trace is forward or backward.
+        first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
+            Used for controlling trace range and instruction relevance based on direction.
     """
     if mlil_loc.params:
         imported_function = analysis.resolve_function_type(mlil_loc)
@@ -1034,8 +1120,8 @@ def propagate_mlil_call(
                     func_analyzed,
                     var_to_trace,
                     already_iterated,
-                    vars_found, 
-                    analysis
+                    vars_found,
+                    analysis,
                 )
 
             elif func_analyzed and isinstance(func_analyzed, InterprocTaintResult):
@@ -1063,9 +1149,36 @@ def propagate_mlil_call(
             # If the function isn't modeled or previously seen, analyze it as a new import
             analyze_new_imported_function(mlil_loc, var_to_trace, vars_found, analysis)
 
-    append_tainted_loc(
-        function_object, collected_locs, mlil_loc, var_to_trace, analysis
-    )
+    if not skip_instruction(
+        mlil_loc,
+        first_mlil_loc,
+        var_to_trace,
+        trace_type,
+    ):
+        append_tainted_loc(
+            function_object, collected_locs, mlil_loc, var_to_trace, analysis
+        )
+
+
+def add_read_var(
+    mlil_loc: MediumLevelILInstruction,
+) -> bool:
+    """
+    Determine whether the source operand of the given MLIL instruction is a variable reference.
+
+    This function checks if the `.src` operand of a MediumLevelILInstruction is either a `MediumLevelILVar`
+    (i.e., a direct variable access) or a `MediumLevelILAddressOf` (i.e., a reference to the address of a variable).
+
+    Args:
+        mlil_loc (MediumLevelILInstruction): The MLIL instruction to inspect.
+
+    Returns:
+        bool: True if the instruction's source is a variable or a variable address reference; False otherwise.
+    """
+    if isinstance(mlil_loc.src, MediumLevelILVar) or isinstance(
+        mlil_loc.src, MediumLevelILAddressOf
+    ):
+        return True
 
 
 def propagate_mlil_set_var(
@@ -1078,6 +1191,8 @@ def propagate_mlil_set_var(
     ],
     collected_locs: List[TaintedLOC],
     analysis,
+    trace_type: SliceType,
+    first_mlil_loc: MediumLevelILInstruction,
 ) -> None:
     """
     Handles taint propagation for MLIL_SET_VAR instructions, including memory loads with offset tracking.
@@ -1094,6 +1209,9 @@ def propagate_mlil_set_var(
         var_to_trace: The current tainted variable being traced.
         collected_locs (List[TaintedLOC]): List of tainted locations recorded so far.
         analysis (Analysis): The analysis engine (BinGoggles `Analysis` class).
+        trace_type (SliceType): Indicates whether the taint trace is forward or backward.
+        first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
+            Used for controlling trace range and instruction relevance based on direction.
     """
     if isinstance(mlil_loc.src, MediumLevelILLoad) or isinstance(
         mlil_loc.dest, MediumLevelILLoad
@@ -1169,9 +1287,22 @@ def propagate_mlil_set_var(
                 variable_written_to, var_to_trace, vars_found, mlil_loc, analysis
             )
 
-    append_tainted_loc(
-        function_object, collected_locs, mlil_loc, var_to_trace, analysis
-    )
+    if mlil_loc.vars_read:
+        for variable_written_to in mlil_loc.vars_read:
+            if add_read_var(mlil_loc):
+                append_tainted_var_by_type(
+                    variable_written_to, var_to_trace, vars_found, mlil_loc, analysis
+                )
+
+    if not skip_instruction(
+        mlil_loc,
+        first_mlil_loc,
+        var_to_trace,
+        trace_type,
+    ):
+        append_tainted_loc(
+            function_object, collected_locs, mlil_loc, var_to_trace, analysis
+        )
 
 
 def propagate_mlil_set_var_field(
@@ -1183,6 +1314,8 @@ def propagate_mlil_set_var_field(
     ],
     collected_locs: List[TaintedLOC],
     analysis,
+    trace_type: SliceType,
+    first_mlil_loc: MediumLevelILInstruction,
 ):
     """
     Handles taint propagation for MLIL_SET_VAR_FIELD instructions.
@@ -1197,13 +1330,22 @@ def propagate_mlil_set_var_field(
         var_to_trace: The original tainted variable being traced.
         collected_locs (List[TaintedLOC]): Accumulated list of tainted instruction locations.
         analysis (Analysis): The analysis engine (BinGoggles `Analysis` class).
+        trace_type (SliceType): Indicates whether the taint trace is forward or backward.
+        first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
+            Used for controlling trace range and instruction relevance based on direction.
     """
     append_tainted_var_by_type(
         mlil_loc.dest, var_to_trace, vars_found, mlil_loc, analysis
     )
-    append_tainted_loc(
-        function_object, collected_locs, mlil_loc, var_to_trace, analysis
-    )
+    if not skip_instruction(
+        mlil_loc,
+        first_mlil_loc,
+        var_to_trace,
+        trace_type,
+    ):
+        append_tainted_loc(
+            function_object, collected_locs, mlil_loc, var_to_trace, analysis
+        )
 
 
 def propagate_mlil_unhandled_operation(
@@ -1215,6 +1357,8 @@ def propagate_mlil_unhandled_operation(
     ],
     collected_locs: List[TaintedLOC],
     analysis,
+    trace_type: SliceType,
+    first_mlil_loc: MediumLevelILInstruction,
 ) -> None:
     """
     Handles taint propagation for MLIL instructions not explicitly modeled elsewhere.
@@ -1230,6 +1374,9 @@ def propagate_mlil_unhandled_operation(
         var_to_trace: The current tainted variable being traced.
         collected_locs (List[TaintedLOC]): List of tainted locations recorded so far.
         analysis (Analysis): The analysis engine (BinGoggles `Analysis` class).
+        trace_type (SliceType): Indicates whether the taint trace is forward or backward.
+        first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
+            Used for controlling trace range and instruction relevance based on direction.
     """
     if mlil_loc.vars_written and is_rw_operation(mlil_loc):
         for variable_written_to in mlil_loc.vars_written:
@@ -1237,9 +1384,15 @@ def propagate_mlil_unhandled_operation(
                 variable_written_to, var_to_trace, vars_found, mlil_loc, analysis
             )
 
-    append_tainted_loc(
-        function_object, collected_locs, mlil_loc, var_to_trace, analysis
-    )
+    if not skip_instruction(
+        mlil_loc,
+        first_mlil_loc,
+        var_to_trace,
+        trace_type,
+    ):
+        append_tainted_loc(
+            function_object, collected_locs, mlil_loc, var_to_trace, analysis
+        )
 
 
 def sort_collected_locs(
@@ -1292,6 +1445,8 @@ def propagate_by_mlil_operation(
     collected_locs: List[TaintedLOC],
     already_iterated: list,
     analysis,
+    trace_type: SliceType,
+    first_mlil_loc: MediumLevelILInstruction,
 ) -> None:
     """
     Dispatches taint propagation logic based on the MLIL operation type.
@@ -1309,6 +1464,9 @@ def propagate_by_mlil_operation(
         collected_locs (List[TaintedLOC]): Accumulated list of tainted instruction locations.
         already_iterated (list): Variables already seen in the trace (loop prevention).
         analysis (Analysis): The analysis engine (BinGoggles `Analysis` class).
+        trace_type (SliceType): Indicates whether the taint trace is forward or backward.
+        first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
+            Used for controlling trace range and instruction relevance based on direction.
     """
     match int(mlil_loc.operation):
         case int(MediumLevelILOperation.MLIL_STORE_STRUCT):
@@ -1319,6 +1477,8 @@ def propagate_by_mlil_operation(
                 var_to_trace,
                 vars_found,
                 analysis,
+                trace_type,
+                first_mlil_loc,
             )
 
         case int(MediumLevelILOperation.MLIL_STORE):
@@ -1330,6 +1490,8 @@ def propagate_by_mlil_operation(
                 vars_found,
                 already_iterated,
                 analysis,
+                trace_type,
+                first_mlil_loc,
             )
 
         case int(MediumLevelILOperation.MLIL_CALL):
@@ -1341,6 +1503,8 @@ def propagate_by_mlil_operation(
                 vars_found,
                 already_iterated,
                 analysis,
+                trace_type,
+                first_mlil_loc,
             )
 
         case int(MediumLevelILOperation.MLIL_SET_VAR):
@@ -1352,6 +1516,8 @@ def propagate_by_mlil_operation(
                 var_to_trace,
                 collected_locs,
                 analysis,
+                trace_type,
+                first_mlil_loc,
             )
 
         case int(MediumLevelILOperation.MLIL_SET_VAR_FIELD):
@@ -1362,6 +1528,8 @@ def propagate_by_mlil_operation(
                 var_to_trace,
                 collected_locs,
                 analysis,
+                trace_type,
+                first_mlil_loc,
             )
 
         case _:
@@ -1372,6 +1540,8 @@ def propagate_by_mlil_operation(
                 var_to_trace,
                 collected_locs,
                 analysis,
+                trace_type,
+                first_mlil_loc,
             )
 
 
@@ -1428,7 +1598,10 @@ def trace_tainted_variable(
             instr_mlil = function_object.get_llil_at(ref.address).mlil
             # Determine if we should skip this instruction
             if skip_instruction(
-                function_object, instr_mlil, collected_locs, var_to_trace, trace_type
+                mlil_loc,
+                mlil_loc,
+                var_to_trace,
+                trace_type,
             ):
                 continue
 
@@ -1441,6 +1614,8 @@ def trace_tainted_variable(
                 collected_locs,
                 already_iterated,
                 analysis,
+                trace_type,
+                mlil_loc,
             )
 
     return sort_collected_locs(trace_type, collected_locs, already_iterated)

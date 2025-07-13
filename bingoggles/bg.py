@@ -542,7 +542,7 @@ class Analysis:
             propagation_cache[key] = (slice_data, propagated_vars)
 
             # Get function calls that pass along tainted variables
-            sliced_calls = self.get_sliced_calls(slice_data, func_name, propagated_vars)
+            sliced_calls = self.get_sliced_calls(slice_data, func_name, tuple(propagated_vars))
             if sliced_calls is None:
                 return
 
@@ -601,7 +601,7 @@ class Analysis:
         propagation_cache[key] = (slice_data, propagated_vars)
 
         # Check for initial cross-function taint propagation
-        sliced_calls = self.get_sliced_calls(slice_data, og_func_name, propagated_vars)
+        sliced_calls = self.get_sliced_calls(slice_data, og_func_name, tuple(propagated_vars))
         if sliced_calls:
             for (caller_func, loc_addr), (
                 callee_name,
@@ -1194,14 +1194,17 @@ class Analysis:
             return modeled_functions[get_modeled_function_index(func_symbol)]
 
         # Analyze imported function
+        if hasattr(func_symbol, "name"):
+            func_symbol = func_symbol.name
+
         if self.libraries_mapped:
             for lib_name, lib_binary_view in self.libraries_mapped.items():
                 for func in lib_binary_view.functions:
-                    if func.name == func_symbol.name:
+                    if func.name == func_symbol:
                         text_section = lib_binary_view.sections.get(".text")
                         for func in lib_binary_view.functions:
                             if text_section.start <= func.start < text_section.end:
-                                if func_symbol.name.lower() in func.name.lower():
+                                if func_symbol in func.name.lower():
                                     return self.trace_function_taint(
                                         function_node=func,
                                         tainted_params=tainted_param,
