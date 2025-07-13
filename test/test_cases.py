@@ -46,12 +46,13 @@ def find_dir(root_path: str, target_name: str) -> str | None:
     return None
 
 
-bingoggles_path = Path(__file__).parent.parent
+bingoggles_path = Path(__file__).parent
+print(bingoggles_path)
 uclibc_path = str(bingoggles_path / "buildroot/output/target/lib/libc.so.0")
-
+print(uclibc_path)
 
 def test_backwards_slice_var(
-    bg_init, test_bin=f"{bingoggles_path}/test/binaries/bin/test_mlil_store"
+    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_mlil_store"
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -75,7 +76,7 @@ def test_backwards_slice_var(
 
 
 def test_fwd_slice_param(
-    bg_init, test_bin=f"{bingoggles_path}/test/binaries/bin/test_slices"
+    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_slices"
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -98,7 +99,7 @@ def test_fwd_slice_param(
 
 
 def test_fwd_slice_var(
-    bg_init, test_bin=f"{bingoggles_path}/test/binaries/bin/test_mlil_store"
+    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_mlil_store"
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -137,7 +138,7 @@ def test_fwd_slice_var(
 
 
 def test_get_sliced_calls(
-    bg_init, test_bin=f"{bingoggles_path}/test/binaries/bin/test_get_sliced_calls"
+    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_get_sliced_calls"
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -187,7 +188,7 @@ def test_get_sliced_calls(
 
 
 def test_complete_bkd_slice_var(
-    bg_init, test_bin=f"{bingoggles_path}/test/binaries/bin/test_backwards_slice"
+    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_backwards_slice"
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -220,7 +221,7 @@ def test_complete_bkd_slice_var(
 
 
 def test_complete_fwd_slice_var(
-    bg_init, test_bin=f"{bingoggles_path}/test/binaries/bin/test_uaf"
+    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_uaf"
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -268,7 +269,7 @@ def test_complete_fwd_slice_var(
 
 
 def test_complete_fwd_slice_param(
-    bg_init, test_bin=f"{bingoggles_path}/test/binaries/bin/test_is_param_tainted"
+    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_is_param_tainted"
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -311,7 +312,7 @@ def test_complete_fwd_slice_param(
 
 
 def test_is_param_tainted(
-    bg_init, test_bin=f"{bingoggles_path}/test/binaries/bin/test_is_param_tainted"
+    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_is_param_tainted"
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -344,7 +345,7 @@ def test_is_param_tainted(
 
 
 def test_global_tracking_fwd_var(
-    bg_init, test_bin=f"{bingoggles_path}/test/binaries/bin/test_global_tracking"
+    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_global_tracking"
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -374,7 +375,7 @@ def test_global_tracking_fwd_var(
     ), "glob_buf not in tainted variables"
 
 
-def test_uaf(bg_init, test_bin=f"{bingoggles_path}/test/binaries/bin/test_uaf"):
+def test_uaf(bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_uaf"):
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[uclibc_path],
@@ -543,7 +544,7 @@ def test_uaf(bg_init, test_bin=f"{bingoggles_path}/test/binaries/bin/test_uaf"):
 
 
 def test_load_struct(
-    bg_init, test_bin=f"{bingoggles_path}/test/binaries/bin/test_struct_member"
+    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_struct_member"
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -564,7 +565,7 @@ def test_load_struct(
 
 
 def test_set_var_field(
-    bg_init, test_bin=f"{bingoggles_path}/test/binaries/bin/test_struct_member"
+    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_struct_member"
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -592,7 +593,7 @@ def test_set_var_field(
 
 def test_interproc_memcpy(
     bg_init,
-    test_bin=f"{bingoggles_path}/test/binaries/bin/test_function_param_tainted_memcpy",
+    test_bin=f"{bingoggles_path}/binaries/bin/test_function_param_tainted_memcpy",
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
