@@ -1,0 +1,201 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "test_backwards_slice_var",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "test/test_cases.py::test_backwards_slice_var",
+                "-v",
+                "-s"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
+            "name": "test_fwd_slice_param",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "test/test_cases.py::test_fwd_slice_param",
+                "-v",
+                "-s"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
+            "name": "test_fwd_slice_var",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "test/test_cases.py::test_fwd_slice_var",
+                "-v",
+                "-s"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
+            "name": "test_get_sliced_calls",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "test/test_cases.py::test_get_sliced_calls",
+                "-v",
+                "-s"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
+            "name": "test_complete_bkd_slice_var",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "test/test_cases.py::test_complete_bkd_slice_var",
+                "-v",
+                "-s"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
+            "name": "test_complete_fwd_slice_var",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "test/test_cases.py::test_complete_fwd_slice_var",
+                "-v",
+                "-s"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
+            "name": "test_complete_fwd_slice_param",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "test/test_cases.py::test_complete_fwd_slice_param",
+                "-v",
+                "-s"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
+            "name": "test_is_param_tainted",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "test/test_cases.py::test_is_param_tainted",
+                "-v",
+                "-s"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
+            "name": "test_global_tracking_fwd_var",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "test/test_cases.py::test_global_tracking_fwd_var",
+                "-v",
+                "-s"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
+            "name": "test_uaf",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "test/test_cases.py::test_uaf",
+                "-v",
+                "-s"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
+            "name": "test_load_struct",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "test/test_cases.py::test_load_struct",
+                "-v",
+                "-s"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
+            "name": "test_set_var_field",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "test/test_cases.py::test_set_var_field",
+                "-v",
+                "-s"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
+            "name": "test_interproc_memcpy",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "test/test_cases.py::test_interproc_memcpy",
+                "-v",
+                "-s"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
+            "name": "Run All Tests",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "test/test_cases.py",
+                "-v",
+                "-s"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        }
+    ]
+}
