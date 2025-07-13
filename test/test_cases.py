@@ -47,9 +47,7 @@ def find_dir(root_path: str, target_name: str) -> str | None:
 
 
 bingoggles_path = Path(__file__).parent
-print(bingoggles_path)
 uclibc_path = str(bingoggles_path / "buildroot/output/target/lib/libc.so.0")
-print(uclibc_path)
 
 def test_backwards_slice_var(
     bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_mlil_store"
