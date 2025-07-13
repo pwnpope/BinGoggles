@@ -62,6 +62,7 @@ class Analysis:
 
         if self.verbose:
             self.trace_function_taint_printed = False
+
     @cache
     def get_sliced_calls(
         self,
@@ -821,26 +822,6 @@ class Analysis:
 
         variable_mapping = {}
         tainted_parameters = set()
-        read_write_ops = [
-            int(MediumLevelILOperation.MLIL_SET_VAR),
-            int(MediumLevelILOperation.MLIL_SET_VAR_ALIASED),
-            int(MediumLevelILOperation.MLIL_SET_VAR_ALIASED_FIELD),
-            int(MediumLevelILOperation.MLIL_SET_VAR_FIELD),
-            int(MediumLevelILOperation.MLIL_SET_VAR_SPLIT),
-            int(MediumLevelILOperation.MLIL_LOAD),
-            int(MediumLevelILOperation.MLIL_LOAD_STRUCT),
-            int(MediumLevelILOperation.MLIL_STORE),
-            int(MediumLevelILOperation.MLIL_STORE_STRUCT),
-            int(MediumLevelILOperation.MLIL_VAR),
-            int(MediumLevelILOperation.MLIL_VAR_ALIASED),
-            int(MediumLevelILOperation.MLIL_VAR_ALIASED_FIELD),
-            int(MediumLevelILOperation.MLIL_VAR_FIELD),
-            int(MediumLevelILOperation.MLIL_VAR_SPLIT),
-            int(MediumLevelILOperation.MLIL_VAR_PHI),
-            int(MediumLevelILOperation.MLIL_MEM_PHI),
-            int(MediumLevelILOperation.MLIL_ADDRESS_OF),
-            int(MediumLevelILOperation.MLIL_ADDRESS_OF_FIELD),
-        ]
 
         # Iterate through each MLIL block in the function
         for mlil_block in function_node.mlil:
@@ -863,6 +844,11 @@ class Analysis:
                             if isinstance(offset_variable, MediumLevelILConst):
                                 addr_var, offset = loc.dest.operands
                                 offset_variable = None
+
+                            elif isinstance(offset_variable, MediumLevelILVarSsa):
+                                addr_var, offset_variable = loc.dest.operands
+                                offset_variable = offset_variable.var
+
                             else:
                                 addr_var, offset = address_variable.operands
 
@@ -878,7 +864,11 @@ class Analysis:
                                 TaintedVarOffset(
                                     variable=addr_var,
                                     offset=offset,
-                                    offset_var=offset_var_taintedvar,
+                                    offset_var=TaintedVar(
+                                        variable=offset_var_taintedvar[0],
+                                        confidence_level=TaintConfidence.NotTainted,
+                                        loc_address=loc.address,
+                                    ),
                                     confidence_level=TaintConfidence.Tainted,
                                     loc_address=loc.address,
                                     targ_function=function_node,
@@ -1053,17 +1043,17 @@ class Analysis:
         underlying_tainted = {tv.variable for tv in tainted_variables}
         underlying_tainted_object = {tv for tv in tainted_variables}
 
-        #:DEBUG
-        from pprint import pprint
+        # #:DEBUG
+        # from pprint import pprint
 
-        pprint(underlying_tainted)
-        print(f"\n{'='*100}")
-        pprint(underlying_tainted_object)
-        print(f"\n{'='*100}")
-        pprint(variable_mapping)
-        print(f"\n{'='*100}")
-        pprint(tainted_variables)
-        print(f"\n{'='*100}")
+        # pprint(underlying_tainted)
+        # print(f"\n{'='*100}")
+        # pprint(underlying_tainted_object)
+        # print(f"\n{'='*100}")
+        # pprint(variable_mapping)
+        # print(f"\n{'='*100}")
+        # pprint(tainted_variables)
+        # print(f"\n{'='*100}")
 
         # Determine all parameters that are tainted by walking through the variable mapping.
 
