@@ -25,7 +25,7 @@ from bingoggles.bingoggles_types import *
 from bingoggles.modules import *
 import os
 from functools import lru_cache
-
+from pathlib import Path
 
 @lru_cache(maxsize=None)
 def find_dir(root_path: str, target_name: str) -> str | None:
@@ -46,10 +46,8 @@ def find_dir(root_path: str, target_name: str) -> str | None:
     return None
 
 
-# bingoggles_path = find_dir("/", "BinGoggles")
-# uclibc_path = bingoggles_path+"test/buildroot/output/target/lib/libc.so.0"
-bingoggles_path = "/home/pope/dev/BinGoggles"
-uclibc_path = bingoggles_path + "/test/buildroot/output/target/lib/libc.so.0"
+bingoggles_path = Path(__file__).parent.parent
+uclibc_path = str(bingoggles_path / "buildroot/output/target/lib/libc.so.0")
 
 
 def test_backwards_slice_var(
@@ -58,8 +56,6 @@ def test_backwards_slice_var(
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[uclibc_path],
-        host="127.0.0.1",
-        port=18812,
     )
     bv, libraries_mapped = bg.init()
 
@@ -84,8 +80,6 @@ def test_fwd_slice_param(
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[uclibc_path],
-        host="127.0.0.1",
-        port=18812,
     )
     bv, libraries_mapped = bg.init()
 
@@ -109,8 +103,6 @@ def test_fwd_slice_var(
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[uclibc_path],
-        host="127.0.0.1",
-        port=18812,
     )
     bv, libraries_mapped = bg.init()
 
@@ -150,8 +142,6 @@ def test_get_sliced_calls(
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[uclibc_path],
-        host="127.0.0.1",
-        port=18812,
     )
     bv, libraries_mapped = bg.init()
 
@@ -202,8 +192,6 @@ def test_complete_bkd_slice_var(
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[uclibc_path],
-        host="127.0.0.1",
-        port=18812,
     )
     bv, libraries_mapped = bg.init()
 
@@ -237,8 +225,6 @@ def test_complete_fwd_slice_var(
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[uclibc_path],
-        host="127.0.0.1",
-        port=18812,
     )
     bv, libraries_mapped = bg.init()
 
@@ -287,8 +273,6 @@ def test_complete_fwd_slice_param(
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[uclibc_path],
-        host="127.0.0.1",
-        port=18812,
     )
     bv, libraries_mapped = bg.init()
     analysis = Analysis(binaryview=bv, verbose=False, libraries_mapped=libraries_mapped)
@@ -332,8 +316,6 @@ def test_is_param_tainted(
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[uclibc_path],
-        host="127.0.0.1",
-        port=18812,
     )
     bv, libraries_mapped = bg.init()
 
@@ -367,8 +349,6 @@ def test_global_tracking_fwd_var(
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[uclibc_path],
-        host="127.0.0.1",
-        port=18812,
     )
     bv, libraries_mapped = bg.init()
     aux = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
@@ -568,8 +548,6 @@ def test_load_struct(
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[uclibc_path],
-        host="127.0.0.1",
-        port=18812,
     )
     bv, libraries_mapped = bg.init()
 
@@ -591,8 +569,6 @@ def test_set_var_field(
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[uclibc_path],
-        host="127.0.0.1",
-        port=18812,
     )
     bv, libraries_mapped = bg.init()
 
@@ -621,8 +597,6 @@ def test_interproc_memcpy(
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[uclibc_path],
-        host="127.0.0.1",
-        port=18812,
     )
     bv, libraries_mapped = bg.init()
 
@@ -632,6 +606,29 @@ def test_interproc_memcpy(
         # 0804924c        fgets(&var_e8, 0x64, __TMC_END__)
         target=TaintTarget(0x0804924C, "var_e8"),
         var_type=SlicingID.FunctionVar,
+    )
+
+    pprint(tainted_vars)
+
+    # 000824f0    int32_t wms_ts_encode_CDMA_OTA(char* arg1, int32_t* arg2)
+
+
+def test(
+    bg_init,
+    test_bin=f"/home/pope/xchglabs/AG35-Research/bin/mbimd.bndb",
+):
+    bg = bg_init(
+        target_bin=abspath(test_bin),
+        libraries=[uclibc_path],
+    )
+    bv, libraries_mapped = bg.init()
+
+    aux = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
+
+    _, _, tainted_vars = aux.tainted_slice(
+        # 000824f0    int32_t wms_ts_encode_CDMA_OTA(char* arg1, int32_t* arg2)
+        target=TaintTarget(0x000824F0, "arg1"),
+        var_type=SlicingID.FunctionParam,
     )
 
     pprint(tainted_vars)
