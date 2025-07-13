@@ -15,7 +15,7 @@ from rich.progress import Progress
 from rich.status import Status
 from typing import List, Union
 
-import binaryninja as binja
+import binaryninja as bn
 
 
 class TaintConfidence:
@@ -363,11 +363,9 @@ class BGInit:
     def init(self):
         with Progress() as progress:
             task_connect = progress.add_task("[cyan]Connecting to API...", total=1)
-            c = self._api_connect()
             progress.update(task_connect, advance=1)
 
             task_load_bin = progress.add_task("[green]Loading binary...", total=1)
-            bn = c.root.binaryninja
             bv = bn.load(self.target_bin)
             progress.update(task_load_bin, advance=1)
 
@@ -396,6 +394,7 @@ class BGInitRpyc(BGInit):
     of the BinGoggles state for performing binary analysis, caching results, and loading the
     necessary libraries.
     """
+
     def __init__(
         self,
         target_bin: str,
