@@ -58,9 +58,9 @@ class TaintedGlobal:
         const_ptr: MediumLevelILConstPtr,
         symbol_object: CoreSymbol,
     ):
-        self.variable: Variable = variable
-        self.confidence_level: TaintConfidence = confidence_level
-        self.loc_address: int = loc_address
+        self.variable = variable
+        self.confidence_level = confidence_level
+        self.loc_address = loc_address
         self.const_ptr = const_ptr
         self.symbol_object = symbol_object
 

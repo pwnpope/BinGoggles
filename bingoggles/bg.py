@@ -225,21 +225,23 @@ class Analysis:
                     and s.name == target.variable
                 ]
                 if symbol:
-                    constr_ptr = None
+                    const_ptr = None
+                    symbol_obj = None
 
                     for op in flat(instr_mlil.operands):
                         if hasattr(op, "address"):
                             s = get_symbol_from_const_ptr(self.bv, op)
-                            if s and s == symbol:
-                                constr_ptr = op
+                            if s and s in [i for i in symbol]:
+                                const_ptr = op
+                                symbol_obj = s
                                 break
 
                     tainted_global = TaintedGlobal(
                         variable=target.variable,
                         confidence_level=TaintConfidence.Tainted,
                         loc_address=target.loc_address,
-                        const_ptr=constr_ptr,
-                        symbol_object=symbol,
+                        const_ptr=const_ptr,
+                        symbol_object=symbol_obj,
                     )
 
                     if slice_type == SliceType.Forward:
@@ -542,7 +544,9 @@ class Analysis:
             propagation_cache[key] = (slice_data, propagated_vars)
 
             # Get function calls that pass along tainted variables
-            sliced_calls = self.get_sliced_calls(slice_data, func_name, tuple(propagated_vars))
+            sliced_calls = self.get_sliced_calls(
+                tuple(slice_data), func_name, tuple(propagated_vars)
+            )
             if sliced_calls is None:
                 return
 
@@ -601,7 +605,9 @@ class Analysis:
         propagation_cache[key] = (slice_data, propagated_vars)
 
         # Check for initial cross-function taint propagation
-        sliced_calls = self.get_sliced_calls(slice_data, og_func_name, tuple(propagated_vars))
+        sliced_calls = self.get_sliced_calls(
+            tuple(slice_data), og_func_name, tuple(propagated_vars)
+        )
         if sliced_calls:
             for (caller_func, loc_addr), (
                 callee_name,

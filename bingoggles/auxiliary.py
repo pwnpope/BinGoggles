@@ -74,7 +74,7 @@ def get_symbol_from_const_ptr(
     for symbol in [
         s for s in bv.get_symbols() if int(s.type) == int(SymbolType.DataSymbol)
     ]:
-        if symbol.address == const_ptr.value:
+        if symbol.address == const_ptr.value.value:
             return symbol
 
     return None
@@ -232,7 +232,9 @@ def is_address_of_field_offset_match(
         bool: True if the offset in the instruction matches the offset of `var_to_trace`,
               otherwise False.
     """
-    destination, source = mlil_instr.dest, mlil_instr.src if hasattr(mlil_instr, "src") else None
+    destination, source = mlil_instr.dest, (
+        mlil_instr.src if hasattr(mlil_instr, "src") else None
+    )
 
     if isinstance(destination, list):
         for d in destination:
@@ -619,6 +621,7 @@ def skip_instruction(
 
     return False
 
+
 def append_tainted_loc(
     function_object: Function,
     collected_locs: List[TaintedLOC],
@@ -735,47 +738,6 @@ def propagate_mlil_store_struct(
         first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
             Used for controlling trace range and instruction relevance based on direction.
     """
-    struct_offset = mlil_loc.ssa_form.offset
-    instr_hlil = function_object.get_llil_at(mlil_loc.address).hlil
-
-    if instr_hlil.operation == int(HighLevelILOperation.HLIL_ASSIGN):
-        lhs = instr_hlil.dest
-
-        if lhs.operation == int(HighLevelILOperation.HLIL_DEREF_FIELD):
-            struct_offset = lhs.offset
-            base_expr = lhs.src
-
-            if base_expr.operation == int(HighLevelILOperation.HLIL_VAR):
-                base_var = base_expr.var
-                tainted_struct_member = TaintedStructMember(
-                    loc_address=instr_hlil.address,
-                    member=get_struct_field_name(mlil_loc),
-                    offset=struct_offset,
-                    hlil_var=base_var,
-                    variable=mlil_loc.dest.var,
-                    confidence_level=TaintConfidence.Tainted,
-                )
-
-                vars_found.append(tainted_struct_member)
-
-    elif mlil_loc.operation == int(MediumLevelILOperation.MLIL_SET_VAR):
-        struct_offset = mlil_loc.ssa_form.src.offset
-        source = mlil_loc.src
-        source_hlil = instr_hlil.src
-
-        if source.operation == int(MediumLevelILOperation.MLIL_LOAD_STRUCT):
-            base_var = source_hlil.var
-            tainted_struct_member = TaintedStructMember(
-                loc_address=mlil_loc.address,
-                member=get_struct_field_name(mlil_loc),
-                offset=struct_offset,
-                hlil_var=base_var,
-                variable=mlil_loc.src.src.var,
-                confidence_level=TaintConfidence.Tainted,
-            )
-
-            vars_found.append(tainted_struct_member)
-
     if not skip_instruction(
         mlil_loc,
         first_mlil_loc,
@@ -785,6 +747,47 @@ def propagate_mlil_store_struct(
         append_tainted_loc(
             function_object, collected_locs, mlil_loc, var_to_trace, analysis
         )
+
+        struct_offset = mlil_loc.ssa_form.offset
+        instr_hlil = function_object.get_llil_at(mlil_loc.address).hlil
+
+        if instr_hlil.operation == int(HighLevelILOperation.HLIL_ASSIGN):
+            lhs = instr_hlil.dest
+
+            if lhs.operation == int(HighLevelILOperation.HLIL_DEREF_FIELD):
+                struct_offset = lhs.offset
+                base_expr = lhs.src
+
+                if base_expr.operation == int(HighLevelILOperation.HLIL_VAR):
+                    base_var = base_expr.var
+                    tainted_struct_member = TaintedStructMember(
+                        loc_address=instr_hlil.address,
+                        member=get_struct_field_name(mlil_loc),
+                        offset=struct_offset,
+                        hlil_var=base_var,
+                        variable=mlil_loc.dest.var,
+                        confidence_level=TaintConfidence.Tainted,
+                    )
+
+                    vars_found.append(tainted_struct_member)
+
+        elif mlil_loc.operation == int(MediumLevelILOperation.MLIL_SET_VAR):
+            struct_offset = mlil_loc.ssa_form.src.offset
+            source = mlil_loc.src
+            source_hlil = instr_hlil.src
+
+            if source.operation == int(MediumLevelILOperation.MLIL_LOAD_STRUCT):
+                base_var = source_hlil.var
+                tainted_struct_member = TaintedStructMember(
+                    loc_address=mlil_loc.address,
+                    member=get_struct_field_name(mlil_loc),
+                    offset=struct_offset,
+                    hlil_var=base_var,
+                    variable=mlil_loc.src.src.var,
+                    confidence_level=TaintConfidence.Tainted,
+                )
+
+                vars_found.append(tainted_struct_member)
 
 
 def propagate_mlil_store(
@@ -821,89 +824,6 @@ def propagate_mlil_store(
         first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
             Used for controlling trace range and instruction relevance based on direction.
     """
-    address_variable, offset_variable = None, None
-    offset_var_taintedvar = None
-    addr_var = None
-    offset = None
-
-    if len(mlil_loc.dest.operands) == 1:
-        addr_var = mlil_loc.dest.operands[0]
-
-    elif len(mlil_loc.dest.operands) == 2:
-        address_variable, offset_variable = mlil_loc.dest.operands
-        if isinstance(offset_variable, MediumLevelILConst):
-            addr_var, offset = mlil_loc.dest.operands
-            offset_variable = None
-        else:
-            addr_var, offset = address_variable.operands
-
-        if offset_variable:
-            offset_var_taintedvar = [
-                var.variable
-                for var in already_iterated
-                if var.variable == offset_variable
-            ]
-
-    if offset_var_taintedvar:
-        vars_found.append(
-            TaintedVarOffset(
-                variable=(addr_var if isinstance(addr_var, Variable) else addr_var.var),
-                offset=offset,
-                offset_var=offset_var_taintedvar,
-                confidence_level=TaintConfidence.Tainted,
-                loc_address=mlil_loc.address,
-                targ_function=function_object,
-            )
-        )
-
-    elif offset_variable:
-        vars_found.append(
-            TaintedVarOffset(
-                variable=address_variable,
-                offset=offset,
-                offset_var=TaintedVar(
-                    variable=offset_variable,
-                    confidence_level=TaintConfidence.NotTainted,
-                    loc_address=mlil_loc.address,
-                ),
-                confidence_level=var_to_trace.confidence_level,
-                loc_address=mlil_loc.address,
-                targ_function=function_object,
-            )
-        )
-        if isinstance(offset_variable, MediumLevelILConstPtr):
-            glob_symbol = get_symbol_from_const_ptr(analysis.bv, offset_variable)
-
-            if glob_symbol:
-                vars_found.append(
-                    TaintedVarOffset(
-                        variable=address_variable,
-                        offset=offset,
-                        offset_var=TaintedGlobal(
-                            glob_symbol.name,
-                            TaintConfidence.NotTainted,
-                            mlil_loc.address,
-                            offset_variable,
-                            glob_symbol,
-                        ),
-                        confidence_level=var_to_trace.confidence_level,
-                        loc_address=mlil_loc.address,
-                        targ_function=function_object,
-                    )
-                )
-
-    else:
-        vars_found.append(
-            TaintedVarOffset(
-                variable=(addr_var if isinstance(addr_var, Variable) else addr_var.var),
-                offset=offset,
-                offset_var=None,
-                confidence_level=TaintConfidence.Tainted,
-                loc_address=mlil_loc.address,
-                targ_function=function_object,
-            )
-        )
-
     if not skip_instruction(
         mlil_loc,
         first_mlil_loc,
@@ -913,6 +833,93 @@ def propagate_mlil_store(
         append_tainted_loc(
             function_object, collected_locs, mlil_loc, var_to_trace, analysis
         )
+
+        address_variable, offset_variable = None, None
+        offset_var_taintedvar = None
+        addr_var = None
+        offset = None
+
+        if len(mlil_loc.dest.operands) == 1:
+            addr_var = mlil_loc.dest.operands[0]
+
+        elif len(mlil_loc.dest.operands) == 2:
+            address_variable, offset_variable = mlil_loc.dest.operands
+            if isinstance(offset_variable, MediumLevelILConst):
+                addr_var, offset = mlil_loc.dest.operands
+                offset_variable = None
+            else:
+                addr_var, offset = address_variable.operands
+
+            if offset_variable:
+                offset_var_taintedvar = [
+                    var.variable
+                    for var in already_iterated
+                    if var.variable == offset_variable
+                ]
+
+        if offset_var_taintedvar:
+            vars_found.append(
+                TaintedVarOffset(
+                    variable=(
+                        addr_var if isinstance(addr_var, Variable) else addr_var.var
+                    ),
+                    offset=offset,
+                    offset_var=offset_var_taintedvar,
+                    confidence_level=TaintConfidence.Tainted,
+                    loc_address=mlil_loc.address,
+                    targ_function=function_object,
+                )
+            )
+
+        elif offset_variable:
+            vars_found.append(
+                TaintedVarOffset(
+                    variable=address_variable,
+                    offset=offset,
+                    offset_var=TaintedVar(
+                        variable=offset_variable,
+                        confidence_level=TaintConfidence.NotTainted,
+                        loc_address=mlil_loc.address,
+                    ),
+                    confidence_level=var_to_trace.confidence_level,
+                    loc_address=mlil_loc.address,
+                    targ_function=function_object,
+                )
+            )
+            if isinstance(offset_variable, MediumLevelILConstPtr):
+                glob_symbol = get_symbol_from_const_ptr(analysis.bv, offset_variable)
+
+                if glob_symbol:
+                    vars_found.append(
+                        TaintedVarOffset(
+                            variable=address_variable,
+                            offset=offset,
+                            offset_var=TaintedGlobal(
+                                glob_symbol.name,
+                                TaintConfidence.NotTainted,
+                                mlil_loc.address,
+                                offset_variable,
+                                glob_symbol,
+                            ),
+                            confidence_level=var_to_trace.confidence_level,
+                            loc_address=mlil_loc.address,
+                            targ_function=function_object,
+                        )
+                    )
+
+        else:
+            vars_found.append(
+                TaintedVarOffset(
+                    variable=(
+                        addr_var if isinstance(addr_var, Variable) else addr_var.var
+                    ),
+                    offset=offset,
+                    offset_var=None,
+                    confidence_level=TaintConfidence.Tainted,
+                    loc_address=mlil_loc.address,
+                    targ_function=function_object,
+                )
+            )
 
 
 def analyze_function_model(
@@ -1105,50 +1112,6 @@ def propagate_mlil_call(
         first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
             Used for controlling trace range and instruction relevance based on direction.
     """
-    if mlil_loc.params:
-        imported_function = analysis.resolve_function_type(mlil_loc)
-
-        if imported_function:
-            func_analyzed = analysis.analyze_function_taint(
-                imported_function, var_to_trace
-            )
-
-            if func_analyzed and isinstance(func_analyzed, FunctionModel):
-                # If it's a known modeled function, use the model logic
-                analyze_function_model(
-                    mlil_loc,
-                    func_analyzed,
-                    var_to_trace,
-                    already_iterated,
-                    vars_found,
-                    analysis,
-                )
-
-            elif func_analyzed and isinstance(func_analyzed, InterprocTaintResult):
-                # If it's a real function we analyzed, zip tainted params with call params
-                zipped_results = list(
-                    zip(
-                        func_analyzed.tainted_param_names,
-                        mlil_loc.params,
-                    )
-                )
-
-                for _, var in zipped_results:
-                    # Wrap each tainted parameter into the appropriate BinGoggles taint type
-                    append_tainted_var_by_type(
-                        var, var_to_trace, vars_found, mlil_loc, analysis
-                    )
-
-                if func_analyzed.is_return_tainted:
-                    # If return value is tainted, treat it as a new tainted variable
-                    append_tainted_var_by_type(
-                        var, var_to_trace, vars_found, mlil_loc, analysis
-                    )
-
-        else:
-            # If the function isn't modeled or previously seen, analyze it as a new import
-            analyze_new_imported_function(mlil_loc, var_to_trace, vars_found, analysis)
-
     if not skip_instruction(
         mlil_loc,
         first_mlil_loc,
@@ -1158,6 +1121,52 @@ def propagate_mlil_call(
         append_tainted_loc(
             function_object, collected_locs, mlil_loc, var_to_trace, analysis
         )
+
+        if mlil_loc.params:
+            imported_function = analysis.resolve_function_type(mlil_loc)
+
+            if imported_function:
+                func_analyzed = analysis.analyze_function_taint(
+                    imported_function, var_to_trace
+                )
+
+                if func_analyzed and isinstance(func_analyzed, FunctionModel):
+                    # If it's a known modeled function, use the model logic
+                    analyze_function_model(
+                        mlil_loc,
+                        func_analyzed,
+                        var_to_trace,
+                        already_iterated,
+                        vars_found,
+                        analysis,
+                    )
+
+                elif func_analyzed and isinstance(func_analyzed, InterprocTaintResult):
+                    # If it's a real function we analyzed, zip tainted params with call params
+                    zipped_results = list(
+                        zip(
+                            func_analyzed.tainted_param_names,
+                            mlil_loc.params,
+                        )
+                    )
+
+                    for _, var in zipped_results:
+                        # Wrap each tainted parameter into the appropriate BinGoggles taint type
+                        append_tainted_var_by_type(
+                            var, var_to_trace, vars_found, mlil_loc, analysis
+                        )
+
+                    if func_analyzed.is_return_tainted:
+                        # If return value is tainted, treat it as a new tainted variable
+                        append_tainted_var_by_type(
+                            var, var_to_trace, vars_found, mlil_loc, analysis
+                        )
+
+            else:
+                # If the function isn't modeled or previously seen, analyze it as a new import
+                analyze_new_imported_function(
+                    mlil_loc, var_to_trace, vars_found, analysis
+                )
 
 
 def add_read_var(
@@ -1213,87 +1222,6 @@ def propagate_mlil_set_var(
         first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
             Used for controlling trace range and instruction relevance based on direction.
     """
-    if isinstance(mlil_loc.src, MediumLevelILLoad) or isinstance(
-        mlil_loc.dest, MediumLevelILLoad
-    ):
-        if isinstance(mlil_loc.src, MediumLevelILLoad):
-            try:
-                address_variable, offset_variable = mlil_loc.src.vars_read
-
-            except ValueError:
-                address_variable = mlil_loc.src.vars_read[0]
-                offset_variable = None
-
-            except Exception as e:
-                print(
-                    "[LOC (unhandled)]: ",
-                    mlil_loc,
-                    hex(mlil_loc.address),
-                )
-                print("[Error]: ", e)
-
-        else:
-            address_variable, offset_variable = mlil_loc.dest.vars_written
-
-        offset_var_taintedvar = [
-            var.variable for var in already_iterated if var.variable == offset_variable
-        ]
-
-        if offset_var_taintedvar:
-            vars_found.append(
-                TaintedVarOffset(
-                    variable=address_variable,
-                    offset=None,
-                    offset_var=offset_var_taintedvar[0],
-                    confidence_level=var_to_trace.confidence_level,
-                    loc_address=mlil_loc.address,
-                    targ_function=function_object,
-                )
-            )
-            if (
-                offset_var_taintedvar[0].confidence_level == TaintConfidence.Tainted
-                and var_to_trace.confidence_level == TaintConfidence.Tainted
-                or var_to_trace.confidence_level == TaintConfidence.MaybeTainted
-            ):
-                if mlil_loc.vars_written:
-                    for variable_written_to in mlil_loc.vars_written:
-                        append_tainted_var_by_type(
-                            variable_written_to,
-                            var_to_trace,
-                            vars_found,
-                            mlil_loc,
-                            analysis,
-                        )
-            else:
-                if mlil_loc.vars_written:
-                    for variable_written_to in mlil_loc.vars_written:
-                        append_tainted_var_by_type(
-                            variable_written_to,
-                            var_to_trace,
-                            vars_found,
-                            mlil_loc,
-                            analysis,
-                        )
-
-        else:
-            for variable_written_to in mlil_loc.vars_written:
-                append_tainted_var_by_type(
-                    variable_written_to, var_to_trace, vars_found, mlil_loc, analysis
-                )
-
-    elif mlil_loc.vars_written:
-        for variable_written_to in mlil_loc.vars_written:
-            append_tainted_var_by_type(
-                variable_written_to, var_to_trace, vars_found, mlil_loc, analysis
-            )
-
-    if mlil_loc.vars_read:
-        for variable_written_to in mlil_loc.vars_read:
-            if add_read_var(mlil_loc):
-                append_tainted_var_by_type(
-                    variable_written_to, var_to_trace, vars_found, mlil_loc, analysis
-                )
-
     if not skip_instruction(
         mlil_loc,
         first_mlil_loc,
@@ -1303,6 +1231,97 @@ def propagate_mlil_set_var(
         append_tainted_loc(
             function_object, collected_locs, mlil_loc, var_to_trace, analysis
         )
+
+        if isinstance(mlil_loc.src, MediumLevelILLoad) or isinstance(
+            mlil_loc.dest, MediumLevelILLoad
+        ):
+            if isinstance(mlil_loc.src, MediumLevelILLoad):
+                try:
+                    address_variable, offset_variable = mlil_loc.src.vars_read
+
+                except ValueError:
+                    address_variable = mlil_loc.src.vars_read[0]
+                    offset_variable = None
+
+                except Exception as e:
+                    print(
+                        "[LOC (unhandled)]: ",
+                        mlil_loc,
+                        hex(mlil_loc.address),
+                    )
+                    print("[Error]: ", e)
+
+            else:
+                address_variable, offset_variable = mlil_loc.dest.vars_written
+
+            offset_var_taintedvar = [
+                var.variable
+                for var in already_iterated
+                if var.variable == offset_variable
+            ]
+
+            if offset_var_taintedvar:
+                vars_found.append(
+                    TaintedVarOffset(
+                        variable=address_variable,
+                        offset=None,
+                        offset_var=offset_var_taintedvar[0],
+                        confidence_level=var_to_trace.confidence_level,
+                        loc_address=mlil_loc.address,
+                        targ_function=function_object,
+                    )
+                )
+                if (
+                    offset_var_taintedvar[0].confidence_level == TaintConfidence.Tainted
+                    and var_to_trace.confidence_level == TaintConfidence.Tainted
+                    or var_to_trace.confidence_level == TaintConfidence.MaybeTainted
+                ):
+                    if mlil_loc.vars_written:
+                        for variable_written_to in mlil_loc.vars_written:
+                            append_tainted_var_by_type(
+                                variable_written_to,
+                                var_to_trace,
+                                vars_found,
+                                mlil_loc,
+                                analysis,
+                            )
+                else:
+                    if mlil_loc.vars_written:
+                        for variable_written_to in mlil_loc.vars_written:
+                            append_tainted_var_by_type(
+                                variable_written_to,
+                                var_to_trace,
+                                vars_found,
+                                mlil_loc,
+                                analysis,
+                            )
+
+            else:
+                for variable_written_to in mlil_loc.vars_written:
+                    append_tainted_var_by_type(
+                        variable_written_to,
+                        var_to_trace,
+                        vars_found,
+                        mlil_loc,
+                        analysis,
+                    )
+
+        elif mlil_loc.vars_written:
+            for variable_written_to in mlil_loc.vars_written:
+                append_tainted_var_by_type(
+                    variable_written_to, var_to_trace, vars_found, mlil_loc, analysis
+                )
+
+        if mlil_loc.vars_read:
+            for variable_written_to in mlil_loc.vars_read:
+                if add_read_var(mlil_loc):
+                    append_tainted_var_by_type(
+                        variable_written_to,
+                        var_to_trace,
+                        vars_found,
+                        mlil_loc,
+                        analysis,
+                    )
 
 
 def propagate_mlil_set_var_field(
@@ -1334,9 +1353,6 @@ def propagate_mlil_set_var_field(
         first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
             Used for controlling trace range and instruction relevance based on direction.
     """
-    append_tainted_var_by_type(
-        mlil_loc.dest, var_to_trace, vars_found, mlil_loc, analysis
-    )
     if not skip_instruction(
         mlil_loc,
         first_mlil_loc,
@@ -1345,6 +1361,10 @@ def propagate_mlil_set_var_field(
     ):
         append_tainted_loc(
             function_object, collected_locs, mlil_loc, var_to_trace, analysis
+        )
+
+        append_tainted_var_by_type(
+            mlil_loc.dest, var_to_trace, vars_found, mlil_loc, analysis
         )
 
 
@@ -1378,12 +1398,6 @@ def propagate_mlil_unhandled_operation(
         first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
             Used for controlling trace range and instruction relevance based on direction.
     """
-    if mlil_loc.vars_written and is_rw_operation(mlil_loc):
-        for variable_written_to in mlil_loc.vars_written:
-            append_tainted_var_by_type(
-                variable_written_to, var_to_trace, vars_found, mlil_loc, analysis
-            )
-
     if not skip_instruction(
         mlil_loc,
         first_mlil_loc,
@@ -1393,6 +1407,12 @@ def propagate_mlil_unhandled_operation(
         append_tainted_loc(
             function_object, collected_locs, mlil_loc, var_to_trace, analysis
         )
+
+        if mlil_loc.vars_written and is_rw_operation(mlil_loc):
+            for variable_written_to in mlil_loc.vars_written:
+                append_tainted_var_by_type(
+                    variable_written_to, var_to_trace, vars_found, mlil_loc, analysis
+                )
 
 
 def sort_collected_locs(
