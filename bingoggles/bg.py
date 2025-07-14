@@ -3,6 +3,7 @@ from binaryninja.mediumlevelil import (
     MediumLevelILVar,
     MediumLevelILRet,
     MediumLevelILVarSsa,
+    MediumLevelILInstruction,
 )
 from binaryninja.highlevelil import HighLevelILOperation
 from binaryninja import Function
@@ -54,6 +55,10 @@ class Analysis:
             - find_first_var_use(...): Find first instruction where a variable is read or written in SSA form.
             - resolve_function_type(...): Classify a call destination as imported, builtin, or neither.
             - analyze_function_taint(...): Analyze imported or modeled functions for taint propagation.
+            - init_function_var_trace(...): Initialize taint tracing for a function variable.
+            - init_global_var_trace(...): Initialize taint tracing for a global variable.
+            - init_struct_member_trace(...): Initialize taint tracing for a struct member variable.
+            - render_sliced_output(...): Render the output of a taint slice for visualization or further analysis.
         """
         self.bv = binaryview
         self.verbose = verbose
@@ -131,6 +136,373 @@ class Analysis:
 
         return function_calls
 
+    def init_function_var_trace(
+        self,
+        slice_type: SliceType,
+        target: TaintTarget,
+        instr_mlil: MediumLevelILInstruction,
+        func_obj: Function,
+    ):
+        """
+        Initialize taint tracing for a function variable.
+
+        This function identifies and traces the propagation of a variable within a function
+    using either forward or backward slicing. It resolves the variable reference using the
+    function's context and analyzes its usage in MLIL instructions.
+
+        Args:
+            slice_type (SliceType): Direction of the slice (Forward or Backward).
+            target (TaintTarget): The target function variable to trace, including its name and location.
+            instr_mlil (MediumLevelILInstruction): The MLIL instruction at the target location.
+            func_obj (Function): The Binary Ninja function object containing the variable.
+
+        Returns:
+            tuple[list[TaintedLOC], list[TaintedVar]]:
+                - A list of tainted code locations (TaintedLOC) where taint propagation was detected.
+                - A list of all propagated variables (TaintedVar) found during the trace.
+        """
+        var_object = str_to_var_object(target.variable, func_obj)
+
+        if var_object:
+            if slice_type == SliceType.Forward:
+                return trace_tainted_variable(
+                    analysis=self,
+                    function_object=func_obj,
+                    mlil_loc=instr_mlil,
+                    variable=var_object,
+                    trace_type=SliceType.Forward,
+                )
+
+            elif slice_type == SliceType.Backward:
+                return trace_tainted_variable(
+                    analysis=self,
+                    function_object=func_obj,
+                    mlil_loc=instr_mlil,
+                    variable=var_object,
+                    trace_type=SliceType.Backward,
+                )
+
+            else:
+                raise TypeError(
+                    f"[{Fore.RED}ERROR{Fore.RESET}] slice_type must be either forward or backward"
+                )
+
+    def init_global_var_trace(
+        self,
+        slice_type: SliceType,
+        target: TaintTarget,
+        instr_mlil: MediumLevelILInstruction,
+        func_obj: Function,
+    ):
+        """
+        Initialize taint tracing for a global variable.
+
+        This function identifies and traces the propagation of a global variable through a function
+        using either forward or backward slicing. It resolves the global variable reference from
+        Binary Ninja's symbol table and analyzes its usage in MLIL instructions.
+
+        Args:
+            slice_type (SliceType): Direction of the slice (Forward or Backward).
+            target (TaintTarget): The target global variable to trace, including its name and location.
+            instr_mlil (MediumLevelILInstruction): The MLIL instruction at the target location.
+            func_obj (Function): The Binary Ninja function object containing the global variable.
+
+        Returns:
+            tuple[list[TaintedLOC], list[TaintedVar]]:
+                - A list of tainted code locations (TaintedLOC) where taint propagation was detected.
+                - A list of all propagated variables (TaintedVar) found during the trace.
+        """
+        symbol = [
+            s
+            for s in self.bv.get_symbols()
+            if int(s.type) == int(SymbolType.DataSymbol) and s.name == target.variable
+        ]
+        if symbol:
+            const_ptr = None
+            symbol_obj = None
+
+            for op in flat(instr_mlil.operands):
+                if hasattr(op, "address"):
+                    s = get_symbol_from_const_ptr(self.bv, op)
+                    if s and s in [i for i in symbol]:
+                        const_ptr = op
+                        symbol_obj = s
+                        break
+
+            tainted_global = TaintedGlobal(
+                variable=target.variable,
+                confidence_level=TaintConfidence.Tainted,
+                loc_address=target.loc_address,
+                const_ptr=const_ptr,
+                symbol_object=symbol_obj,
+            )
+
+            if slice_type == SliceType.Forward:
+                return trace_tainted_variable(
+                    analysis=self,
+                    function_object=func_obj,
+                    mlil_loc=instr_mlil,
+                    variable=tainted_global,
+                    trace_type=SliceType.Forward,
+                )
+
+            elif slice_type == SliceType.Backward:
+                return trace_tainted_variable(
+                    analysis=self,
+                    function_object=func_obj,
+                    mlil_loc=instr_mlil,
+                    variable=tainted_global,
+                    trace_type=SliceType.Backward,
+                )
+
+            else:
+                raise TypeError(
+                    f"[{Fore.RED}ERROR{Fore.RESET}] slice_type must be either forward or backward"
+                )
+
+    def init_struct_member_trace(
+        self,
+        slice_type: SliceType,
+        target: TaintTarget,
+        instr_mlil: MediumLevelILInstruction,
+        func_obj: Function,
+    ):
+        """
+        Initialize taint tracing for a struct member variable.
+
+        This function identifies and traces the propagation of a struct member variable
+        through a function using either forward or backward slicing. It analyzes the MLIL
+        and HLIL instructions to determine the variable's usage and taint propagation.
+
+        Args:
+            slice_type (SliceType): Direction of the slice (Forward or Backward).
+            target (TaintTarget): The target struct member variable to trace, including its name and location.
+            instr_mlil (MediumLevelILInstruction): The MLIL instruction at the target location.
+            func_obj (Function): The Binary Ninja function object containing the struct member.
+
+        Returns:
+            tuple[list[TaintedLOC], list[TaintedVar]]:
+                - A list of tainted code locations (TaintedLOC) where taint propagation was detected.
+                - A list of all propagated variables (TaintedVar) found during the trace.
+        """
+        instr_hlil = func_obj.get_llil_at(target.loc_address).hlil
+
+        try:
+            struct_offset = instr_mlil.ssa_form.src.offset
+        except AttributeError:
+            struct_offset = instr_mlil.ssa_form.offset
+
+        if instr_hlil.operation == int(HighLevelILOperation.HLIL_ASSIGN):
+            destination = instr_hlil.dest
+
+            if destination.operation == int(HighLevelILOperation.HLIL_DEREF_FIELD):
+                struct_offset = destination.offset
+                base_expr = destination.src
+
+                if base_expr.operation == int(HighLevelILOperation.HLIL_VAR):
+                    base_var = base_expr.var
+                    tainted_struct_member = TaintedStructMember(
+                        loc_address=target.loc_address,
+                        member=target.variable,
+                        offset=struct_offset,
+                        hlil_var=base_var,
+                        variable=instr_mlil.dest.var,
+                        confidence_level=TaintConfidence.Tainted,
+                    )
+
+                    if slice_type == SliceType.Forward:
+                        return trace_tainted_variable(
+                            analysis=self,
+                            function_object=func_obj,
+                            mlil_loc=instr_mlil,
+                            variable=tainted_struct_member,
+                            trace_type=SliceType.Forward,
+                        )
+
+                    elif slice_type == SliceType.Backward:
+                        return trace_tainted_variable(
+                            analysis=self,
+                            function_object=func_obj,
+                            mlil_loc=instr_mlil,
+                            variable=tainted_struct_member,
+                            trace_type=SliceType.Backward,
+                        )
+
+                    else:
+                        raise TypeError(
+                            f"[{Fore.RED}ERROR{Fore.RESET}] slice_type must be either forward or backward"
+                        )
+
+        elif instr_mlil.operation == int(MediumLevelILOperation.MLIL_SET_VAR):
+            source = instr_mlil.src
+            base_var = instr_mlil.src.src
+            if source.operation == int(MediumLevelILOperation.MLIL_LOAD_STRUCT):
+                tainted_struct_member = TaintedStructMember(
+                    loc_address=target.loc_address,
+                    member=target.variable,
+                    offset=struct_offset,
+                    hlil_var=base_var,
+                    variable=instr_mlil.src.src.var,
+                    confidence_level=TaintConfidence.Tainted,
+                )
+
+                if slice_type == SliceType.Forward:
+                    return trace_tainted_variable(
+                        analysis=self,
+                        function_object=func_obj,
+                        mlil_loc=instr_mlil,
+                        variable=tainted_struct_member,
+                        trace_type=SliceType.Forward,
+                    )
+
+                elif slice_type == SliceType.Backward:
+                    return trace_tainted_variable(
+                        analysis=self,
+                        function_object=func_obj,
+                        mlil_loc=instr_mlil,
+                        variable=tainted_struct_member,
+                        trace_type=SliceType.Backward,
+                    )
+
+                else:
+                    raise TypeError(
+                        f"[{Fore.RED}ERROR{Fore.RESET}] slice_type must be either forward or backward"
+                    )
+
+            elif source.operation == int(MediumLevelILOperation.MLIL_VAR_FIELD):
+                tainted_struct_member = TaintedStructMember(
+                    loc_address=target.loc_address,
+                    member=target.variable,
+                    offset=struct_offset,
+                    hlil_var=base_var,
+                    variable=instr_mlil.dest,
+                    confidence_level=TaintConfidence.Tainted,
+                )
+
+                if slice_type == SliceType.Forward:
+                    return trace_tainted_variable(
+                        analysis=self,
+                        function_object=func_obj,
+                        mlil_loc=instr_mlil,
+                        variable=tainted_struct_member,
+                        trace_type=SliceType.Forward,
+                    )
+
+                elif slice_type == SliceType.Backward:
+                    return trace_tainted_variable(
+                        analysis=self,
+                        function_object=func_obj,
+                        mlil_loc=instr_mlil,
+                        variable=tainted_struct_member,
+                        trace_type=SliceType.Backward,
+                    )
+
+        else:
+            raise ValueError(
+                f"[{Fore.RED}ERORR{Fore.RESET}]Couldn't find variable reference, insure that you're using the MLIL to identify your target variable"
+            )
+
+    def init_function_param_trace(self, target: TaintTarget, func_obj: Function):
+        """
+        Initialize taint tracing for a function parameter.
+
+        This function resolves the specified parameter from a `TaintTarget`, identifies the
+        first MLIL reference to that parameter, and begins a forward taint trace from that point
+        using `trace_tainted_variable`.
+
+        Args:
+            target (TaintTarget): A taint target specifying the location and parameter name or object to trace.
+            func_obj (Function): The Binary Ninja function object containing the parameter.
+
+        Returns:
+            tuple[list[TaintedLOC], list[TaintedVar]]:
+                - A list of tainted code locations (TaintedLOC) where taint propagation was detected.
+                - A list of all propagated variables (TaintedVar) found during the trace.
+
+        Raises:
+            AttributeError: If the parameter cannot be resolved or no references to it are found.
+            ValueError: If the resolved reference is not traceable through MLIL.
+        """
+        if isinstance(target.variable, str):
+            target_param = find_param_by_name(
+                func_obj=func_obj, param_name=target.variable
+            )
+
+        elif isinstance(target.variable, MediumLevelILVar):
+            target_param = target.variable.var
+
+        else:
+            target_param = find_param_by_name(
+                func_obj=func_obj, param_name=target.variable.name
+            )
+
+        try:
+            param_refs = func_obj.get_mlil_var_refs(target_param)
+
+        except AttributeError:
+            raise AttributeError(
+                f"[{Fore.RED}Error{Fore.RESET}] Couldn't find the parameter reference"
+            )
+
+        first_ref_addr = [
+            i.address
+            for i in param_refs
+            if func_obj.get_llil_at(i.address).mlil is not None
+        ][0]
+
+        first_ref_mlil = func_obj.get_llil_at(first_ref_addr).mlil
+        return trace_tainted_variable(
+            analysis=self,
+            function_object=func_obj,
+            mlil_loc=first_ref_mlil,
+            variable=target_param,
+            trace_type=SliceType.Forward,
+        )
+
+    def render_sliced_output(
+        self,
+        sliced_func: Union[dict, list],
+        output_mode: OutputMode,
+        func_obj: Function,
+        propagated_vars: list,
+        verbose: bool = False,
+    ):
+        """
+        Renders or returns the output of a sliced function based on the specified output mode.
+
+        Args:
+            sliced_func (dict): A mapping from keys (usually address/function) to lists of TaintedLOC or TaintedVar.
+            output_mode (OutputMode): Specifies how to present the output.
+            func_obj (Function): The function object being analyzed.
+            propagated_vars (list): List of propagated variables (TaintedVar objects).
+            verbose (bool): If True, additional info is printed when output mode is `Returned`.
+
+        Returns:
+            tuple | None: Returns a tuple of (tainted_locs, func_name, propagated_vars) when `Returned`, otherwise None.
+        """
+        if output_mode == OutputMode.Printed:
+            print(
+                f"Address | LOC | Target Variable | Propagated Variable | Taint Confidence\n{(Fore.LIGHTGREEN_EX+'-'+Fore.RESET)*72}"
+            )
+            for i in sliced_func:
+                print(i.loc.instr_index, i)
+        
+        elif output_mode == OutputMode.Returned:
+            if self.verbose:
+                print(
+                    f"Address | LOC | Target Variable | Propagated Variable | Taint Confidence\n{(Fore.LIGHTGREEN_EX+'-'+Fore.RESET)*72}"
+                )
+                for i in sliced_func:
+                    print(i.loc.instr_index, i)
+            
+            return [i for i in sliced_func], func_obj.name, propagated_vars
+
+        
+        else:
+            raise TypeError(
+                f"[{Fore.RED}ERROR{Fore.RESET}] output_mode must be either OutputMode.Printed or OutputMode.Returned"
+            )
+
     @cache
     def tainted_slice(
         self,
@@ -174,7 +546,7 @@ class Analysis:
                 )
                 return None
 
-        sliced_func = {}
+        sliced_func = []
         propagated_vars = []
 
         instr_mlil = None
@@ -185,246 +557,35 @@ class Analysis:
                     f"[{Fore.RED}Error{Fore.RESET}] The address you provided for the target variable is likely wrong."
                 )
 
-        # Start by tracing the initial target variable
         match var_type:
-            # Handle case where the target var for slicing is a function var
             case SlicingID.FunctionVar:
-                var_object = str_to_var_object(target.variable, func_obj)
-
-                if var_object:
-                    # Handle regular variables
-                    if slice_type == SliceType.Forward:
-                        sliced_func, propagated_vars = trace_tainted_variable(
-                            analysis=self,
-                            function_object=func_obj,
-                            mlil_loc=instr_mlil,
-                            variable=var_object,
-                            trace_type=SliceType.Forward,
-                        )
-
-                    elif slice_type == SliceType.Backward:
-                        sliced_func, propagated_vars = trace_tainted_variable(
-                            analysis=self,
-                            function_object=func_obj,
-                            mlil_loc=instr_mlil,
-                            variable=var_object,
-                            trace_type=SliceType.Backward,
-                        )
-
-                    else:
-                        raise TypeError(
-                            f"[{Fore.RED}ERROR{Fore.RESET}] slice_type must be either forward or backward"
-                        )
+                sliced_func, propagated_vars = self.init_function_var_trace(
+                    slice_type=slice_type,
+                    target=target,
+                    instr_mlil=instr_mlil,
+                    func_obj=func_obj,
+                )
 
             case SlicingID.GlobalVar:
-                # Handle Globals
-                symbol = [
-                    s
-                    for s in self.bv.get_symbols()
-                    if int(s.type) == int(SymbolType.DataSymbol)
-                    and s.name == target.variable
-                ]
-                if symbol:
-                    const_ptr = None
-                    symbol_obj = None
-
-                    for op in flat(instr_mlil.operands):
-                        if hasattr(op, "address"):
-                            s = get_symbol_from_const_ptr(self.bv, op)
-                            if s and s in [i for i in symbol]:
-                                const_ptr = op
-                                symbol_obj = s
-                                break
-
-                    tainted_global = TaintedGlobal(
-                        variable=target.variable,
-                        confidence_level=TaintConfidence.Tainted,
-                        loc_address=target.loc_address,
-                        const_ptr=const_ptr,
-                        symbol_object=symbol_obj,
-                    )
-
-                    if slice_type == SliceType.Forward:
-                        sliced_func, propagated_vars = trace_tainted_variable(
-                            analysis=self,
-                            function_object=func_obj,
-                            mlil_loc=instr_mlil,
-                            variable=tainted_global,
-                            trace_type=SliceType.Forward,
-                        )
-
-                    elif slice_type == SliceType.Backward:
-                        sliced_func, propagated_vars = trace_tainted_variable(
-                            analysis=self,
-                            function_object=func_obj,
-                            mlil_loc=instr_mlil,
-                            variable=tainted_global,
-                            trace_type=SliceType.Backward,
-                        )
-
-                    else:
-                        raise TypeError(
-                            f"[{Fore.RED}ERROR{Fore.RESET}] slice_type must be either forward or backward"
-                        )
+                sliced_func, propagated_vars = self.init_global_var_trace(
+                    slice_type=slice_type,
+                    target=target,
+                    instr_mlil=instr_mlil,
+                    func_obj=func_obj,
+                )
 
             case SlicingID.StructMember:
-                # Handle struct member references/derefernces
-                instr_hlil = func_obj.get_llil_at(target.loc_address).hlil
+                sliced_func, propagated_vars = self.init_struct_member_trace(
+                    slice_type=slice_type,
+                    target=target,
+                    instr_mlil=instr_mlil,
+                    func_obj=func_obj,
+                )
 
-                try:
-                    struct_offset = instr_mlil.ssa_form.src.offset
-                except AttributeError:
-                    struct_offset = instr_mlil.ssa_form.offset
-
-                if instr_hlil.operation == int(HighLevelILOperation.HLIL_ASSIGN):
-                    destination = instr_hlil.dest
-
-                    if destination.operation == int(
-                        HighLevelILOperation.HLIL_DEREF_FIELD
-                    ):
-                        struct_offset = destination.offset
-                        base_expr = destination.src
-
-                        if base_expr.operation == int(HighLevelILOperation.HLIL_VAR):
-                            base_var = base_expr.var
-                            tainted_struct_member = TaintedStructMember(
-                                loc_address=target.loc_address,
-                                member=target.variable,
-                                offset=struct_offset,
-                                hlil_var=base_var,
-                                variable=instr_mlil.dest.var,
-                                confidence_level=TaintConfidence.Tainted,
-                            )
-
-                            if slice_type == SliceType.Forward:
-                                sliced_func, propagated_vars = trace_tainted_variable(
-                                    analysis=self,
-                                    function_object=func_obj,
-                                    mlil_loc=instr_mlil,
-                                    variable=tainted_struct_member,
-                                    trace_type=SliceType.Forward,
-                                )
-
-                            elif slice_type == SliceType.Backward:
-                                sliced_func, propagated_vars = trace_tainted_variable(
-                                    analysis=self,
-                                    function_object=func_obj,
-                                    mlil_loc=instr_mlil,
-                                    variable=tainted_struct_member,
-                                    trace_type=SliceType.Backward,
-                                )
-
-                            else:
-                                raise TypeError(
-                                    f"[{Fore.RED}ERROR{Fore.RESET}] slice_type must be either forward or backward"
-                                )
-
-                elif instr_mlil.operation == int(MediumLevelILOperation.MLIL_SET_VAR):
-                    source = instr_mlil.src
-                    base_var = instr_mlil.src.src
-                    if source.operation == int(MediumLevelILOperation.MLIL_LOAD_STRUCT):
-                        tainted_struct_member = TaintedStructMember(
-                            loc_address=target.loc_address,
-                            member=target.variable,
-                            offset=struct_offset,
-                            hlil_var=base_var,
-                            variable=instr_mlil.src.src.var,
-                            confidence_level=TaintConfidence.Tainted,
-                        )
-
-                        if slice_type == SliceType.Forward:
-                            sliced_func, propagated_vars = trace_tainted_variable(
-                                analysis=self,
-                                function_object=func_obj,
-                                mlil_loc=instr_mlil,
-                                variable=tainted_struct_member,
-                                trace_type=SliceType.Forward,
-                            )
-
-                        elif slice_type == SliceType.Backward:
-                            sliced_func, propagated_vars = trace_tainted_variable(
-                                analysis=self,
-                                function_object=func_obj,
-                                mlil_loc=instr_mlil,
-                                variable=tainted_struct_member,
-                                trace_type=SliceType.Backward,
-                            )
-
-                        else:
-                            raise TypeError(
-                                f"[{Fore.RED}ERROR{Fore.RESET}] slice_type must be either forward or backward"
-                            )
-
-                    elif source.operation == int(MediumLevelILOperation.MLIL_VAR_FIELD):
-                        tainted_struct_member = TaintedStructMember(
-                            loc_address=target.loc_address,
-                            member=target.variable,
-                            offset=struct_offset,
-                            hlil_var=base_var,
-                            variable=instr_mlil.dest,
-                            confidence_level=TaintConfidence.Tainted,
-                        )
-
-                        if slice_type == SliceType.Forward:
-                            sliced_func, propagated_vars = trace_tainted_variable(
-                                analysis=self,
-                                function_object=func_obj,
-                                mlil_loc=instr_mlil,
-                                variable=tainted_struct_member,
-                                trace_type=SliceType.Forward,
-                            )
-
-                        elif slice_type == SliceType.Backward:
-                            sliced_func, propagated_vars = trace_tainted_variable(
-                                analysis=self,
-                                function_object=func_obj,
-                                mlil_loc=instr_mlil,
-                                variable=tainted_struct_member,
-                                trace_type=SliceType.Backward,
-                            )
-
-                else:
-                    raise ValueError(
-                        f"[{Fore.RED}ERORR{Fore.RESET}]Couldn't find variable reference, insure that you're using the MLIL to identify your target variable"
-                    )
-
-            # In cases for function params they dont need to be used anywhere where a variable is being assigned for the first time or whatever
-            # so we handle it differently than a normal variable, then can simply be passed into lines of code of function calls.
             case SlicingID.FunctionParam:
-                if isinstance(target.variable, str):
-                    target_param = find_param_by_name(
-                        func_obj=func_obj, param_name=target.variable
-                    )
-
-                elif isinstance(target.variable, MediumLevelILVar):
-                    target_param = target.variable.var
-
-                else:
-                    target_param = find_param_by_name(
-                        func_obj=func_obj, param_name=target.variable.name
-                    )
-
-                try:
-                    param_refs = func_obj.get_mlil_var_refs(target_param)
-
-                except AttributeError:
-                    raise AttributeError(
-                        f"[{Fore.RED}Error{Fore.RESET}] Couldn't find the parameter reference"
-                    )
-
-                first_ref_addr = [
-                    i.address
-                    for i in param_refs
-                    if func_obj.get_llil_at(i.address).mlil is not None
-                ][0]
-
-                first_ref_mlil = func_obj.get_llil_at(first_ref_addr).mlil
-                sliced_func, propagated_vars = trace_tainted_variable(
-                    analysis=self,
-                    function_object=func_obj,
-                    mlil_loc=first_ref_mlil,
-                    variable=target_param,
-                    trace_type=SliceType.Forward,
+                sliced_func, propagated_vars = self.init_function_param_trace(
+                    target=target,
+                    func_obj=func_obj,
                 )
 
             case _:
@@ -432,36 +593,30 @@ class Analysis:
                     f"{Fore.RED}var_type must be either SlicingID.FunctionParam or SlicingID.FunctionVar, please see the SlicingID class{Fore.RESET}"
                 )
 
-        match output:
-            case OutputMode.Printed:
-                print(
-                    f"Address | LOC | Target Variable | Propagated Variable\n{(Fore.LIGHTGREEN_EX+'-'+Fore.RESET)*53}"
-                )
+        if output == OutputMode.Printed:
+            self.render_sliced_output(
+                sliced_func=sliced_func,
+                output_mode=OutputMode.Printed,
+                func_obj=func_obj,
+                propagated_vars=propagated_vars,
+                verbose=self.verbose,
+            )
 
-                for _, data in sorted(sliced_func.items(), key=lambda item: item[0]):
-                    for d in data:
-                        print(d.loc.instr_index, d)
+        elif output == OutputMode.Returned:
+            tainted_locs, func_name, tainted_vars = self.render_sliced_output(
+                sliced_func=sliced_func,
+                output_mode=OutputMode.Returned,
+                func_obj=func_obj,
+                propagated_vars=propagated_vars,
+                verbose=self.verbose,
+            )
 
-            case OutputMode.Returned:
-                if self.verbose:
-                    print(
-                        f"Address | LOC | Target Variable | Propagated Variable | Taint Confidence\n{(Fore.LIGHTGREEN_EX+'-'+Fore.RESET)*72}"
-                    )
-                    for i in sliced_func:
-                        print(i.loc.instr_index, i)
+            return tainted_locs, func_name, tainted_vars
 
-                return (
-                    [
-                        i for i in sliced_func
-                    ],  # list of the collected loc as TaintedLOC objects
-                    func_obj.name,  # Target function name
-                    propagated_vars,  # List of the propagated variables as TaintedVar objects
-                )
-
-            case _:
-                raise TypeError(
-                    f"[{Fore.RED}ERROR{Fore.RESET}]output_mode must be either OutputMode.Printed or OutputMode.Returned"
-                )
+        else:
+            raise TypeError(
+                f"[{Fore.RED}ERROR{Fore.RESET}]output_mode must be either OutputMode.Printed or OutputMode.Returned"
+            )
 
     @cache
     def complete_slice(
