@@ -618,7 +618,7 @@ class Analysis:
                 for param_var, (_, arg_pos) in param_map.items():
                     param_name = getattr(param_var, "var", param_var).name
                     propagated_names = {
-                        getattr(v.variable, "var", v.variable).name
+                        v.variable.name if hasattr(v.variable, "name") else v.variable
                         for v in propagated_vars
                     }
 

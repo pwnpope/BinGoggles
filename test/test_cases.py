@@ -323,25 +323,18 @@ def test_is_param_tainted(
     bv, libraries_mapped = bg.init()
 
     aux = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
-    # data = aux.trace_function_taint(
-    #     # 080492f7    void* my_strcpy(char* d, char* s)
-    #     # 0804933c    int32_t do_calculation_and_write_to_buf(int a, int b, int c, int d, void* result_name)
-    #     function_node=0x080492f7,
-    #     tainted_params=["s"],
-    #     binary_view=bv,
-    # )
     locs, _, tainted_vars = aux.tainted_slice(
         target=TaintTarget(0x080492F7, "s"),
         var_type=SlicingID.FunctionParam,
     )
 
-    # assert data.is_return_tainted is True
+    assert data.is_return_tainted is True
 
-    # # Parameter names should include both 'd' and 's'
-    # param_names = {v.name for v in data.tainted_param_names}
-    # assert "d" in param_names
-    # assert "s" in param_names
-    # assert len(param_names) == 2
+    # Parameter names should include both 'd' and 's'
+    param_names = {v.name for v in data.tainted_param_names}
+    assert "d" in param_names
+    assert "s" in param_names
+    assert len(param_names) == 2
 
     pprint(tainted_vars)
 
@@ -356,24 +349,24 @@ def test_global_tracking_fwd_var(
     bv, libraries_mapped = bg.init()
     aux = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
 
-    # Expected slice for global variable 'glob_buf'
     locs, _, tainted_vars = aux.tainted_slice(
         #    9 @ 08049302  strcpy(&glob_buf, var_12c)
-        target=TaintTarget(0x08049302, "var_12c"),
+        target=TaintTarget(0x08049302, "glob_buf"),
         var_type=SlicingID.FunctionVar,
     )
-    # assert (
-    #     locs is not None and len(locs) > 0
-    # ), "No tainted LOCs found for global variable"
-    # assert any(
-    #     "strcpy" in str(loc) for loc in locs
-    # ), "strcpy should be part of taint path"
-    # assert any(
-    #     "printf" in str(loc) for loc in locs
-    # ), "printf should be part of taint path"
-    # assert any(
-    #     "glob_buf" in str(var.variable) for var in tainted_vars
-    # ), "glob_buf not in tainted variables"
+
+    assert (
+        locs is not None and len(locs) > 0
+    ), "No tainted LOCs found for global variable"
+    assert any(
+        "strcpy" in str(loc) for loc in locs
+    ), "strcpy should be part of taint path"
+    assert any(
+        "printf" in str(loc) for loc in locs
+    ), "printf should be part of taint path"
+    assert any(
+        "glob_buf" in str(var.variable) for var in tainted_vars
+    ), "glob_buf not in tainted variables"
 
 
 def test_uaf(bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_uaf"):
