@@ -606,14 +606,11 @@ class TaintedLOC:
 
     def __repr__(self):
         if int(self.loc.operation) == int(MediumLevelILOperation.MLIL_CALL):
-            addr = int(str(self.loc.dest), 16)
-
-            function = self.function_object.view.get_function_at(addr)
-
-            function_name = function.name if function else f"{addr:#0x}"
+            function = self.function_object.view.get_function_at(int(self.loc.dest.value.value))
+            function_name = function.name if function else f"{self.loc.dest.value.value:#0x}"
 
             loc_str = str(self.loc)
-            loc_str = loc_str.replace(f"{addr:#0x}", function_name)
+            loc_str = loc_str.replace(f"{self.loc.dest.value.value:#0x}", function_name)
 
             if self.taint_confidence == TaintConfidence.Tainted:
                 return f"[{self.addr:#0x}] {Fore.CYAN}{loc_str}{Fore.RESET} -> {Fore.MAGENTA}{self.target_var.variable}{Fore.RESET} -> {Fore.RED}{self.propagated_var}{Fore.RESET} [{Fore.LIGHTBLACK_EX}Tainted{Fore.RESET}]"
