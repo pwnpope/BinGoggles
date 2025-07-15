@@ -2,10 +2,8 @@ SRC_DIR := src
 OBJ_DIR := obj
 BIN_DIR := bin
 
-BUILDROOT_PATH = ../buildroot
-CC := $(BUILDROOT_PATH)/output/host/bin/i686-buildroot-linux-uclibc-gcc
-CFLAGS := -O0 -g
-LDFLAGS := -Wl,--dynamic-linker=$(BUILDROOT_PATH)/output/target/lib/ld-uClibc.so.0 -Wl,-rpath=$(BUILDROOT_PATH)/output/target/lib
+CFLAGS := -O0 -g 
+LDFLAGS := -static
 
 SRCS := $(wildcard $(SRC_DIR)/*.c)
 OBJS := $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRCS))

@@ -48,7 +48,6 @@ def find_dir(root_path: str, target_name: str) -> str | None:
 
 
 bingoggles_path = Path(__file__).parent
-uclibc_path = str(bingoggles_path / "buildroot/output/target/lib/libc.so.0")
 
 
 def test_backwards_slice_var(
@@ -56,7 +55,7 @@ def test_backwards_slice_var(
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
-        libraries=[uclibc_path],
+        libraries=[],
     )
     bv, libraries_mapped = bg.init()
 
@@ -82,7 +81,7 @@ def test_fwd_slice_param(
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
-        libraries=[uclibc_path],
+        libraries=[],
     )
     bv, libraries_mapped = bg.init()
 
@@ -105,7 +104,7 @@ def test_fwd_slice_var(
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
-        libraries=[uclibc_path],
+        libraries=[],
     )
     bv, libraries_mapped = bg.init()
 
@@ -144,7 +143,7 @@ def test_get_sliced_calls(
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
-        libraries=[uclibc_path],
+        libraries=[],
     )
     bv, libraries_mapped = bg.init()
 
@@ -196,7 +195,7 @@ def test_complete_bkd_slice_var(
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
-        libraries=[uclibc_path],
+        libraries=[],
     )
     bv, libraries_mapped = bg.init()
 
@@ -227,7 +226,7 @@ def test_complete_fwd_slice_var(
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
-        libraries=[uclibc_path],
+        libraries=[],
     )
     bv, libraries_mapped = bg.init()
 
@@ -275,7 +274,7 @@ def test_complete_fwd_slice_param(
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
-        libraries=[uclibc_path],
+        libraries=[],
     )
     bv, libraries_mapped = bg.init()
     analysis = Analysis(binaryview=bv, verbose=False, libraries_mapped=libraries_mapped)
@@ -318,7 +317,7 @@ def test_is_param_tainted(
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
-        libraries=[uclibc_path],
+        libraries=[],
     )
     bv, libraries_mapped = bg.init()
 
@@ -344,7 +343,7 @@ def test_global_tracking_fwd_var(
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
-        libraries=[uclibc_path],
+        libraries=[],
     )
     bv, libraries_mapped = bg.init()
     aux = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
@@ -372,7 +371,8 @@ def test_global_tracking_fwd_var(
 def test_uaf(bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_uaf"):
     bg = bg_init(
         target_bin=abspath(test_bin),
-        libraries=[uclibc_path],
+        libraries=[],
+        cleanup
     )
     bv, libraries_mapped = bg.init()
 
@@ -540,7 +540,7 @@ def test_load_struct(
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
-        libraries=[uclibc_path],
+        libraries=[],
     )
     bv, libraries_mapped = bg.init()
 
@@ -561,7 +561,7 @@ def test_set_var_field(
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
-        libraries=[uclibc_path],
+        libraries=[],
     )
     bv, libraries_mapped = bg.init()
 
@@ -589,7 +589,7 @@ def test_interproc_memcpy(
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
-        libraries=[uclibc_path],
+        libraries=[],
     )
     bv, libraries_mapped = bg.init()
 
