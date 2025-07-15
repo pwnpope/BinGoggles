@@ -847,10 +847,10 @@ class Analysis:
     def trace_function_taint(
         self,
         function_node: int | Function,
-        tainted_params: Variable | str | list[Variable],
+        tainted_params: Tuple[Union[Variable, str, Tuple[Variable]]],
         binary_view: BinaryView = None,
         origin_function: Function = None,
-        original_tainted_params: Variable | str | list[Variable] = None,
+        original_tainted_params: Tuple[Union[Variable, str, list[Variable]]] = None,
         tainted_param_map: dict = None,
         recursion_limit=8,
         sub_functions_analyzed=0,
@@ -1156,15 +1156,16 @@ class Analysis:
                         )
 
                     case _:
-                        if loc.operation not in [
+                        if loc.operation in [
                             int(MediumLevelILOperation.MLIL_RET),
                             int(MediumLevelILOperation.MLIL_GOTO),
                             int(MediumLevelILOperation.MLIL_IF),
                             int(MediumLevelILOperation.MLIL_NORET),
-                            int(MediumLevelILOperation.MLIL_NORET),
                             int(MediumLevelILOperation.MLIL_SYSCALL_SSA),
                         ]:
                             continue
+                    
+                        #:TODO add more supoported operations
 
                 # Map variables written to the variables read in the current instruction
                 for var_assignment in loc.vars_written:

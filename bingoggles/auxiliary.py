@@ -15,6 +15,7 @@ from .bingoggles_types import *
 from binaryninja.enums import MediumLevelILOperation, SymbolType
 from binaryninja import BinaryView, Symbol
 from functools import cache
+from .function_registry import get_modeled_function_name_at_callsite
 
 
 def flat(
@@ -345,27 +346,22 @@ def is_rw_operation(instr_mlil: MediumLevelILInstruction):
         int(MediumLevelILOperation.MLIL_LOAD_STRUCT),
         int(MediumLevelILOperation.MLIL_STORE),
         int(MediumLevelILOperation.MLIL_STORE_STRUCT),
-        int(MediumLevelILOperation.MLIL_VAR),
+
+        # review these operations
         int(MediumLevelILOperation.MLIL_VAR_ALIASED),
         int(MediumLevelILOperation.MLIL_VAR_ALIASED_FIELD),
-        int(MediumLevelILOperation.MLIL_VAR_FIELD),
-        int(MediumLevelILOperation.MLIL_VAR_SPLIT),
         int(MediumLevelILOperation.MLIL_VAR_PHI),
+        
         int(MediumLevelILOperation.MLIL_MEM_PHI),
         int(MediumLevelILOperation.MLIL_ADDRESS_OF),
         int(MediumLevelILOperation.MLIL_ADDRESS_OF_FIELD),
+        
     ]
 
     def op_is_rw(il):
         return hasattr(il, "operation") and int(il.operation) in read_write_ops
 
     if not op_is_rw(instr_mlil):
-        return False
-
-    if hasattr(instr_mlil, "src") and not op_is_rw(instr_mlil.src):
-        return False
-
-    if hasattr(instr_mlil, "dest") and not op_is_rw(instr_mlil.dest):
         return False
 
     return True
@@ -575,49 +571,49 @@ def skip_instruction(
         TaintedStructMember, TaintedVar, TaintedGlobal, TaintedVarOffset
     ],
     trace_type: SliceType,
-) -> bool:
+    analysis,
+    function_object: Function,
+) -> Union[bool, bool]:
     """
     Determines whether a given MLIL instruction should be skipped during taint tracing.
 
-    This function prevents unnecessary or incorrect propagation by skipping instructions
-    that meet certain criteria, such as being unrelated in control flow, already visited,
-    or mismatched in expected offset or dereference context.
-
-    Skipping occurs when:
-        - The instruction is not part of the function's MLIL
-        - The instruction has already been processed (present in collected_locs)
-        - In forward tracing, the instruction occurs before the first MLIL location
-        - In backward tracing, the instruction occurs after the first MLIL location
-        - When tracking a TaintedVarOffset, if the dereference/offset does not match
+    This function prevents incorrect or redundant propagation by skipping instructions
+    based on control flow order, dereference/offset mismatch, or trace context.
 
     Args:
-        mlil_loc (MediumLevelILInstruction): The instruction under consideration.
-        first_mlil_loc (MediumLevelILInstruction): The initial instruction that began the trace.
+        mlil_loc (MediumLevelILInstruction): The instruction currently being evaluated for tracing.
+        first_mlil_loc (MediumLevelILInstruction): The original instruction that initiated the slice.
         var_to_trace (Union[TaintedStructMember, TaintedVar, TaintedGlobal, TaintedVarOffset]):
-            The current variable being traced.
-        trace_type (SliceType): The slicing direction (SliceType.Forward or SliceType.Backward).
+            The variable or field being traced.
+        trace_type (SliceType): Direction of the slice (SliceType.Forward or SliceType.Backward).
+        analysis: The taint analysis context or engine instance.
+        function_object (Function): The function in which this instruction resides.
 
     Returns:
-        bool: True if the instruction should be skipped, False otherwise.
+        Tuple[bool, bool]:
+            - First value (`skip_loc`): True if the instruction should be skipped and not processed.
+            - Second value (`process_var`): True if the variable should still be processed, even if the instruction is skipped.
     """
+    if first_mlil_loc.address == var_to_trace.loc_address:
+        if get_connected_var(analysis, function_object, var_to_trace):
+            return False, True
 
-    # if we cannot resolve the instr mlil then we skip the reference
     if not mlil_loc:
-        return True
+        return True, False
 
     if trace_type == SliceType.Forward:
-        if mlil_loc.instr_index < first_mlil_loc.instr_index:
-            return True
+        if mlil_loc.instr_index < first_mlil_loc.instr_index and var_to_trace.variable not in mlil_loc.vars_read:
+            return True, False
 
-    elif trace_type == SliceType.Backward:
+    elif trace_type == SliceType.Backward and var_to_trace.variable not in mlil_loc.vars_read:
         if mlil_loc.instr_index > first_mlil_loc.instr_index:
-            return True
+            return True, False
 
     if isinstance(var_to_trace, TaintedVarOffset):
         if not is_address_of_field_offset_match(mlil_loc, var_to_trace):
-            return True
+            return True, False
 
-    return False
+    return False, True
 
 
 def append_tainted_loc(
@@ -736,16 +732,20 @@ def propagate_mlil_store_struct(
         first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
             Used for controlling trace range and instruction relevance based on direction.
     """
-    if not skip_instruction(
+    skip_loc, process_var = skip_instruction(
         mlil_loc,
         first_mlil_loc,
         var_to_trace,
         trace_type,
-    ):
+        analysis,
+        function_object,
+    )
+    if not skip_loc:
         append_tainted_loc(
             function_object, collected_locs, mlil_loc, var_to_trace, analysis
         )
 
+    if process_var:
         struct_offset = mlil_loc.ssa_form.offset
         instr_hlil = function_object.get_llil_at(mlil_loc.address).hlil
 
@@ -822,16 +822,20 @@ def propagate_mlil_store(
         first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
             Used for controlling trace range and instruction relevance based on direction.
     """
-    if not skip_instruction(
+    skip_loc, process_var = skip_instruction(
         mlil_loc,
         first_mlil_loc,
         var_to_trace,
         trace_type,
-    ):
+        analysis,
+        function_object,
+    )
+    if not skip_loc:
         append_tainted_loc(
             function_object, collected_locs, mlil_loc, var_to_trace, analysis
         )
 
+    if process_var:
         address_variable, offset_variable = None, None
         offset_var_taintedvar = None
         addr_var = None
@@ -1110,23 +1114,35 @@ def propagate_mlil_call(
         first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
             Used for controlling trace range and instruction relevance based on direction.
     """
-    if not skip_instruction(
+    skip_loc, process_var = skip_instruction(
         mlil_loc,
         first_mlil_loc,
         var_to_trace,
         trace_type,
-    ):
+        analysis,
+        function_object,
+    )
+    if not skip_loc:
         append_tainted_loc(
             function_object, collected_locs, mlil_loc, var_to_trace, analysis
         )
 
+    if process_var:
         if mlil_loc.params:
             imported_function = analysis.resolve_function_type(mlil_loc)
+            normalized_function_name = get_modeled_function_name_at_callsite(function_object, mlil_loc)
+            if imported_function or normalized_function_name:
+                func_analyzed = None
+                if imported_function:
+                    func_analyzed = analysis.analyze_function_taint(
+                        imported_function, var_to_trace
+                    )
 
-            if imported_function:
-                func_analyzed = analysis.analyze_function_taint(
-                    imported_function, var_to_trace
-                )
+                elif normalized_function_name:
+                    func_analyzed = analysis.analyze_function_taint(
+                        imported_function, var_to_trace
+                    )
+
 
                 if func_analyzed and isinstance(func_analyzed, FunctionModel):
                     # If it's a known modeled function, use the model logic
@@ -1220,16 +1236,20 @@ def propagate_mlil_set_var(
         first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
             Used for controlling trace range and instruction relevance based on direction.
     """
-    if not skip_instruction(
+    skip_loc, process_var = skip_instruction(
         mlil_loc,
         first_mlil_loc,
         var_to_trace,
         trace_type,
-    ):
+        analysis,
+        function_object,
+    )
+    if not skip_loc:
         append_tainted_loc(
             function_object, collected_locs, mlil_loc, var_to_trace, analysis
         )
 
+    if process_var:
         if isinstance(mlil_loc.src, MediumLevelILLoad) or isinstance(
             mlil_loc.dest, MediumLevelILLoad
         ):
@@ -1351,16 +1371,20 @@ def propagate_mlil_set_var_field(
         first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
             Used for controlling trace range and instruction relevance based on direction.
     """
-    if not skip_instruction(
+    skip_loc, process_var = skip_instruction(
         mlil_loc,
         first_mlil_loc,
         var_to_trace,
         trace_type,
-    ):
+        analysis,
+        function_object,
+    )
+    if not skip_loc:
         append_tainted_loc(
             function_object, collected_locs, mlil_loc, var_to_trace, analysis
         )
 
+    if process_var:
         append_tainted_var_by_type(
             mlil_loc.dest, var_to_trace, vars_found, mlil_loc, analysis
         )
@@ -1396,16 +1420,20 @@ def propagate_mlil_unhandled_operation(
         first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
             Used for controlling trace range and instruction relevance based on direction.
     """
-    if not skip_instruction(
+    skip_loc, process_var = skip_instruction(
         mlil_loc,
         first_mlil_loc,
         var_to_trace,
         trace_type,
-    ):
+        analysis,
+        function_object,
+    )
+    if not skip_loc:
         append_tainted_loc(
             function_object, collected_locs, mlil_loc, var_to_trace, analysis
         )
 
+    if process_var:
         if mlil_loc.vars_written and is_rw_operation(mlil_loc):
             for variable_written_to in mlil_loc.vars_written:
                 append_tainted_var_by_type(
@@ -1615,26 +1643,28 @@ def trace_tainted_variable(
         for ref in variable_use_sites:
             instr_mlil = function_object.get_llil_at(ref.address).mlil
             # Determine if we should skip this instruction
-            if skip_instruction(
+            skip_loc, process_var = skip_instruction(
                 mlil_loc,
                 mlil_loc,
                 var_to_trace,
                 trace_type,
-            ):
-                continue
-
-            # collect variables for `vars_found` list and `collected_locs` list based off of the instr_mlil operation
-            propagate_by_mlil_operation(
-                function_object,
-                instr_mlil,
-                vars_found,
-                var_to_trace,
-                collected_locs,
-                already_iterated,
                 analysis,
-                trace_type,
-                mlil_loc,
+                function_object,
             )
+
+            if not skip_loc and process_var:
+                # Collect variables for `vars_found` list and `collected_locs` list based off of the instr_mlil operation
+                propagate_by_mlil_operation(
+                    function_object,
+                    instr_mlil,
+                    vars_found,
+                    var_to_trace,
+                    collected_locs,
+                    already_iterated,
+                    analysis,
+                    trace_type,
+                    mlil_loc,
+                )
 
     return sort_collected_locs(trace_type, collected_locs, already_iterated)
 

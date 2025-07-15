@@ -1,5 +1,6 @@
 from .bingoggles_types import FunctionModel
 from typing import Union
+from binaryninja import Function, MediumLevelILInstruction
 
 modeled_functions = [
     FunctionModel("strcpy", [1], [0], True),
@@ -116,3 +117,25 @@ def get_function_model(name: str) -> Union[FunctionModel, None]:
         if func.name == normalized:
             return func
     return None
+
+def get_modeled_function_name_at_callsite(function_object: Function, mlil_loc: MediumLevelILInstruction):
+    """
+    Given an MLIL call instruction, return the normalized name of the called function 
+    if it matches one of the known modeled functions.
+
+    This function extracts the function being called at the provided MLIL instruction,
+    normalizes its name using `normalize_func_name`, and checks if it exists in the 
+    list of modeled functions. If so, the normalized name is returned.
+
+    Args:
+        function_object (Function): The Binary Ninja Function object containing the MLIL instruction.
+        mlil_loc (MediumLevelILInstruction): The MLIL call instruction where the function is invoked.
+
+    Returns:
+        str | None: The normalized name of the matched modeled function, or None if no match is found.
+    """
+    function = function_object.view.get_function_at(int(mlil_loc.dest.value.value))
+    function_name = function.name
+    normalized_name = normalize_func_name(function_name)
+    if normalized_name in [func.name for func in modeled_functions]:
+        return normalized_name

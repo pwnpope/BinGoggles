@@ -322,9 +322,10 @@ def test_is_param_tainted(
     bv, libraries_mapped = bg.init()
 
     aux = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
-    locs, _, tainted_vars = aux.tainted_slice(
-        target=TaintTarget(0x080492F7, "s"),
-        var_type=SlicingID.FunctionParam,
+    # 0x080492f7    void* my_strcpy(char* d, char* s)
+    data = aux.trace_function_taint(
+        function_node=0x080492f7,
+        tainted_params=tuple(["s"]),
     )
 
     assert data.is_return_tainted is True
@@ -335,8 +336,7 @@ def test_is_param_tainted(
     assert "s" in param_names
     assert len(param_names) == 2
 
-    pprint(tainted_vars)
-
+    print(data)
 
 def test_global_tracking_fwd_var(
     bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_global_tracking"
@@ -372,8 +372,7 @@ def test_uaf(bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_uaf"):
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[],
-        host="127.0.0.1",
-        port=18812,
+        cleanup
     )
     bv, libraries_mapped = bg.init()
 
@@ -586,7 +585,7 @@ def test_set_var_field(
 
 def test_interproc_memcpy(
     bg_init,
-    test_bin=f"{bingoggles_path}/binaries/bin/test_function_param_tainted_memcpy",
+    test_bin=f"/home/pope/test_function_param_tainted_memcpy",
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -598,7 +597,7 @@ def test_interproc_memcpy(
 
     _, _, tainted_vars = aux.tainted_slice(
         # 0804924c        fgets(&var_e8, 0x64, __TMC_END__)
-        target=TaintTarget(0x0804924C, "var_e8"),
+        target=TaintTarget(0x4011bf, "var_e8"),
         var_type=SlicingID.FunctionVar,
     )
 
