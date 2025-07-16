@@ -118,13 +118,16 @@ def get_function_model(name: str) -> Union[FunctionModel, None]:
             return func
     return None
 
-def get_modeled_function_name_at_callsite(function_object: Function, mlil_loc: MediumLevelILInstruction):
+
+def get_modeled_function_name_at_callsite(
+    function_object: Function, mlil_loc: MediumLevelILInstruction
+):
     """
-    Given an MLIL call instruction, return the normalized name of the called function 
+    Given an MLIL call instruction, return the normalized name of the called function
     if it matches one of the known modeled functions.
 
     This function extracts the function being called at the provided MLIL instruction,
-    normalizes its name using `normalize_func_name`, and checks if it exists in the 
+    normalizes its name using `normalize_func_name`, and checks if it exists in the
     list of modeled functions. If so, the normalized name is returned.
 
     Args:

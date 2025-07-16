@@ -14,6 +14,7 @@ import socket, os, hashlib, pathlib, rpyc, sys
 from rich.progress import Progress
 from rich.status import Status
 from typing import List, Union
+from enum import Enum, auto
 
 import binaryninja as bn
 
@@ -606,8 +607,12 @@ class TaintedLOC:
 
     def __repr__(self):
         if int(self.loc.operation) == int(MediumLevelILOperation.MLIL_CALL):
-            function = self.function_object.view.get_function_at(int(self.loc.dest.value.value))
-            function_name = function.name if function else f"{self.loc.dest.value.value:#0x}"
+            function = self.function_object.view.get_function_at(
+                int(self.loc.dest.value.value)
+            )
+            function_name = (
+                function.name if function else f"{self.loc.dest.value.value:#0x}"
+            )
 
             loc_str = str(self.loc)
             loc_str = loc_str.replace(f"{self.loc.dest.value.value:#0x}", function_name)
@@ -672,3 +677,10 @@ class FunctionModel:
             f"taints_varargs={self.taints_varargs}, "
             f"vararg_start_index={self.vararg_start_index})"
         )
+
+
+class TraceDecision(Enum):
+    SKIP_AND_DISCARD = auto()  # Skip instruction, don't trace variable
+    SKIP_AND_PROCESS = auto()  # Skip instruction, still trace variable
+    PROCESS_AND_DISCARD = auto()  # Don't skip instruction, but discard variable (rare)
+    PROCESS_AND_TRACE = auto()  # Normal tracing

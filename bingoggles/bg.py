@@ -144,22 +144,22 @@ class Analysis:
         func_obj: Function,
     ):
         """
-        Initialize taint tracing for a function variable.
+            Initialize taint tracing for a function variable.
 
-        This function identifies and traces the propagation of a variable within a function
-    using either forward or backward slicing. It resolves the variable reference using the
-    function's context and analyzes its usage in MLIL instructions.
+            This function identifies and traces the propagation of a variable within a function
+        using either forward or backward slicing. It resolves the variable reference using the
+        function's context and analyzes its usage in MLIL instructions.
 
-        Args:
-            slice_type (SliceType): Direction of the slice (Forward or Backward).
-            target (TaintTarget): The target function variable to trace, including its name and location.
-            instr_mlil (MediumLevelILInstruction): The MLIL instruction at the target location.
-            func_obj (Function): The Binary Ninja function object containing the variable.
+            Args:
+                slice_type (SliceType): Direction of the slice (Forward or Backward).
+                target (TaintTarget): The target function variable to trace, including its name and location.
+                instr_mlil (MediumLevelILInstruction): The MLIL instruction at the target location.
+                func_obj (Function): The Binary Ninja function object containing the variable.
 
-        Returns:
-            tuple[list[TaintedLOC], list[TaintedVar]]:
-                - A list of tainted code locations (TaintedLOC) where taint propagation was detected.
-                - A list of all propagated variables (TaintedVar) found during the trace.
+            Returns:
+                tuple[list[TaintedLOC], list[TaintedVar]]:
+                    - A list of tainted code locations (TaintedLOC) where taint propagation was detected.
+                    - A list of all propagated variables (TaintedVar) found during the trace.
         """
         var_object = str_to_var_object(target.variable, func_obj)
 
@@ -465,7 +465,6 @@ class Analysis:
         output_mode: OutputMode,
         func_obj: Function,
         propagated_vars: list,
-        verbose: bool = False,
     ):
         """
         Renders or returns the output of a sliced function based on the specified output mode.
@@ -475,7 +474,6 @@ class Analysis:
             output_mode (OutputMode): Specifies how to present the output.
             func_obj (Function): The function object being analyzed.
             propagated_vars (list): List of propagated variables (TaintedVar objects).
-            verbose (bool): If True, additional info is printed when output mode is `Returned`.
 
         Returns:
             tuple | None: Returns a tuple of (tainted_locs, func_name, propagated_vars) when `Returned`, otherwise None.
@@ -486,7 +484,7 @@ class Analysis:
             )
             for i in sliced_func:
                 print(i.loc.instr_index, i)
-        
+
         elif output_mode == OutputMode.Returned:
             if self.verbose:
                 print(
@@ -494,10 +492,9 @@ class Analysis:
                 )
                 for i in sliced_func:
                     print(i.loc.instr_index, i)
-            
+
             return [i for i in sliced_func], func_obj.name, propagated_vars
 
-        
         else:
             raise TypeError(
                 f"[{Fore.RED}ERROR{Fore.RESET}] output_mode must be either OutputMode.Printed or OutputMode.Returned"
@@ -599,7 +596,6 @@ class Analysis:
                 output_mode=OutputMode.Printed,
                 func_obj=func_obj,
                 propagated_vars=propagated_vars,
-                verbose=self.verbose,
             )
 
         elif output == OutputMode.Returned:
@@ -608,7 +604,6 @@ class Analysis:
                 output_mode=OutputMode.Returned,
                 func_obj=func_obj,
                 propagated_vars=propagated_vars,
-                verbose=self.verbose,
             )
 
             return tainted_locs, func_name, tainted_vars
@@ -1164,8 +1159,6 @@ class Analysis:
                             int(MediumLevelILOperation.MLIL_SYSCALL_SSA),
                         ]:
                             continue
-                    
-                        #:TODO add more supoported operations
 
                 # Map variables written to the variables read in the current instruction
                 for var_assignment in loc.vars_written:
@@ -1203,54 +1196,14 @@ class Analysis:
 
         # Extract underlying variables from TaintedVar before walking the mapping.
         underlying_tainted = {tv.variable for tv in tainted_variables}
-        underlying_tainted_object = {tv for tv in tainted_variables}
-
-        # #:DEBUG
-        # from pprint import pprint
-
-        # pprint(underlying_tainted)
-        # print(f"\n{'='*100}")
-        # pprint(underlying_tainted_object)
-        # print(f"\n{'='*100}")
-        # pprint(variable_mapping)
-        # print(f"\n{'='*100}")
-        # pprint(tainted_variables)
-        # print(f"\n{'='*100}")
 
         # Determine all parameters that are tainted by walking through the variable mapping.
-
-        # tainted_parameters.update(
-        #     var
-        #     for var in walk_variable(variable_mapping, underlying_tainted)
-        #     if var.name in [param.name for param in origin_function.parameter_vars if isinstance(param, MediumLevelILVarSsa)]
-        # )
-
         for var in walk_variable(variable_mapping, underlying_tainted):
             if isinstance(var, MediumLevelILVarSsa):
                 var = var.var
 
             if var.name not in [param.name for param in origin_function.parameter_vars]:
                 continue
-
-            # matching_obj = next(
-            #     (tv for tv in underlying_tainted_object if tv.variable == var), None
-            # )
-
-            # if not matching_obj:
-            #     print("couldn't find match: ", var)
-            #     continue
-
-            # mlil_instr = origin_function.get_llil_at(matching_obj.loc_address).mlil
-
-            # if mlil_instr.src.operation != int(MediumLevelILOperation.MLIL_VAR) and (
-            #     mlil_instr.operation not in read_write_ops
-            #     or hasattr(mlil_instr, "src")
-            #     and mlil_instr.src.operation not in read_write_ops
-            #     or hasattr(mlil_instr, "dest")
-            #     and mlil_instr.dest.operation not in read_write_ops
-            # ):
-            #     print("we skipped: ", var)
-            #     continue
 
             tainted_parameters.add(var)
 
