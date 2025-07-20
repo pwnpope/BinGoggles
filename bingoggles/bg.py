@@ -166,20 +166,12 @@ class Analysis:
         if var_object:
             if slice_type == SliceType.Forward:
                 return trace_tainted_variable(
-                    analysis=self,
-                    function_object=func_obj,
-                    mlil_loc=instr_mlil,
-                    variable=var_object,
-                    trace_type=SliceType.Forward,
+                    self, func_obj, instr_mlil, var_object, SliceType.Forward
                 )
 
             elif slice_type == SliceType.Backward:
                 return trace_tainted_variable(
-                    analysis=self,
-                    function_object=func_obj,
-                    mlil_loc=instr_mlil,
-                    variable=var_object,
-                    trace_type=SliceType.Backward,
+                    self, func_obj, instr_mlil, var_object, SliceType.Backward
                 )
 
             else:
@@ -230,29 +222,21 @@ class Analysis:
                         break
 
             tainted_global = TaintedGlobal(
-                variable=target.variable,
-                confidence_level=TaintConfidence.Tainted,
-                loc_address=target.loc_address,
-                const_ptr=const_ptr,
-                symbol_object=symbol_obj,
+                target.variable,
+                TaintConfidence.Tainted,
+                target.loc_address,
+                const_ptr,
+                symbol_obj,
             )
 
             if slice_type == SliceType.Forward:
                 return trace_tainted_variable(
-                    analysis=self,
-                    function_object=func_obj,
-                    mlil_loc=instr_mlil,
-                    variable=tainted_global,
-                    trace_type=SliceType.Forward,
+                    self, func_obj, instr_mlil, tainted_global, SliceType.Forward
                 )
 
             elif slice_type == SliceType.Backward:
                 return trace_tainted_variable(
-                    analysis=self,
-                    function_object=func_obj,
-                    mlil_loc=instr_mlil,
-                    variable=tainted_global,
-                    trace_type=SliceType.Backward,
+                    self, func_obj, instr_mlil, tainted_global, SliceType.Backward
                 )
 
             else:
@@ -302,30 +286,30 @@ class Analysis:
                 if base_expr.operation == int(HighLevelILOperation.HLIL_VAR):
                     base_var = base_expr.var
                     tainted_struct_member = TaintedStructMember(
-                        loc_address=target.loc_address,
-                        member=target.variable,
-                        offset=struct_offset,
-                        hlil_var=base_var,
-                        variable=instr_mlil.dest.var,
-                        confidence_level=TaintConfidence.Tainted,
+                        target.loc_address,
+                        target.variable,
+                        struct_offset,
+                        base_var,
+                        instr_mlil.dest.var,
+                        TaintConfidence.Tainted,
                     )
 
                     if slice_type == SliceType.Forward:
                         return trace_tainted_variable(
-                            analysis=self,
-                            function_object=func_obj,
-                            mlil_loc=instr_mlil,
-                            variable=tainted_struct_member,
-                            trace_type=SliceType.Forward,
+                            self,
+                            func_obj,
+                            instr_mlil,
+                            tainted_struct_member,
+                            SliceType.Forward,
                         )
 
                     elif slice_type == SliceType.Backward:
                         return trace_tainted_variable(
-                            analysis=self,
-                            function_object=func_obj,
-                            mlil_loc=instr_mlil,
-                            variable=tainted_struct_member,
-                            trace_type=SliceType.Backward,
+                            self,
+                            func_obj,
+                            instr_mlil,
+                            tainted_struct_member,
+                            SliceType.Backward,
                         )
 
                     else:
@@ -338,30 +322,30 @@ class Analysis:
             base_var = instr_mlil.src.src
             if source.operation == int(MediumLevelILOperation.MLIL_LOAD_STRUCT):
                 tainted_struct_member = TaintedStructMember(
-                    loc_address=target.loc_address,
-                    member=target.variable,
-                    offset=struct_offset,
-                    hlil_var=base_var,
-                    variable=instr_mlil.src.src.var,
-                    confidence_level=TaintConfidence.Tainted,
+                    target.loc_address,
+                    target.variable,
+                    struct_offset,
+                    base_var,
+                    instr_mlil.src.src.var,
+                    TaintConfidence.Tainted,
                 )
 
                 if slice_type == SliceType.Forward:
                     return trace_tainted_variable(
-                        analysis=self,
-                        function_object=func_obj,
-                        mlil_loc=instr_mlil,
-                        variable=tainted_struct_member,
-                        trace_type=SliceType.Forward,
+                        self,
+                        func_obj,
+                        instr_mlil,
+                        tainted_struct_member,
+                        SliceType.Forward,
                     )
 
                 elif slice_type == SliceType.Backward:
                     return trace_tainted_variable(
-                        analysis=self,
-                        function_object=func_obj,
-                        mlil_loc=instr_mlil,
-                        variable=tainted_struct_member,
-                        trace_type=SliceType.Backward,
+                        self,
+                        func_obj,
+                        instr_mlil,
+                        tainted_struct_member,
+                        SliceType.Backward,
                     )
 
                 else:
@@ -371,30 +355,30 @@ class Analysis:
 
             elif source.operation == int(MediumLevelILOperation.MLIL_VAR_FIELD):
                 tainted_struct_member = TaintedStructMember(
-                    loc_address=target.loc_address,
-                    member=target.variable,
-                    offset=struct_offset,
-                    hlil_var=base_var,
-                    variable=instr_mlil.dest,
-                    confidence_level=TaintConfidence.Tainted,
+                    target.loc_address,
+                    target.variable,
+                    struct_offset,
+                    base_var,
+                    instr_mlil.dest,
+                    TaintConfidence.Tainted,
                 )
 
                 if slice_type == SliceType.Forward:
                     return trace_tainted_variable(
-                        analysis=self,
-                        function_object=func_obj,
-                        mlil_loc=instr_mlil,
-                        variable=tainted_struct_member,
-                        trace_type=SliceType.Forward,
+                        self,
+                        func_obj,
+                        instr_mlil,
+                        tainted_struct_member,
+                        SliceType.Forward,
                     )
 
                 elif slice_type == SliceType.Backward:
                     return trace_tainted_variable(
-                        analysis=self,
-                        function_object=func_obj,
-                        mlil_loc=instr_mlil,
-                        variable=tainted_struct_member,
-                        trace_type=SliceType.Backward,
+                        self,
+                        func_obj,
+                        instr_mlil,
+                        tainted_struct_member,
+                        SliceType.Backward,
                     )
 
         else:
@@ -424,17 +408,13 @@ class Analysis:
             ValueError: If the resolved reference is not traceable through MLIL.
         """
         if isinstance(target.variable, str):
-            target_param = find_param_by_name(
-                func_obj=func_obj, param_name=target.variable
-            )
+            target_param = find_param_by_name(func_obj, target.variable)
 
         elif isinstance(target.variable, MediumLevelILVar):
             target_param = target.variable.var
 
         else:
-            target_param = find_param_by_name(
-                func_obj=func_obj, param_name=target.variable.name
-            )
+            target_param = find_param_by_name(func_obj, target.variable.name)
 
         try:
             param_refs = func_obj.get_mlil_var_refs(target_param)
@@ -452,11 +432,7 @@ class Analysis:
 
         first_ref_mlil = func_obj.get_llil_at(first_ref_addr).mlil
         return trace_tainted_variable(
-            analysis=self,
-            function_object=func_obj,
-            mlil_loc=first_ref_mlil,
-            variable=target_param,
-            trace_type=SliceType.Forward,
+            self, func_obj, first_ref_mlil, target_param, SliceType.Forward
         )
 
     def render_sliced_output(
@@ -557,32 +533,23 @@ class Analysis:
         match var_type:
             case SlicingID.FunctionVar:
                 sliced_func, propagated_vars = self.init_function_var_trace(
-                    slice_type=slice_type,
-                    target=target,
-                    instr_mlil=instr_mlil,
-                    func_obj=func_obj,
+                    slice_type, target, instr_mlil, func_obj
                 )
 
             case SlicingID.GlobalVar:
                 sliced_func, propagated_vars = self.init_global_var_trace(
-                    slice_type=slice_type,
-                    target=target,
-                    instr_mlil=instr_mlil,
-                    func_obj=func_obj,
+                    slice_type, target, instr_mlil, func_obj
                 )
 
             case SlicingID.StructMember:
                 sliced_func, propagated_vars = self.init_struct_member_trace(
-                    slice_type=slice_type,
-                    target=target,
-                    instr_mlil=instr_mlil,
-                    func_obj=func_obj,
+                    slice_type, target, instr_mlil, func_obj
                 )
 
             case SlicingID.FunctionParam:
                 sliced_func, propagated_vars = self.init_function_param_trace(
-                    target=target,
-                    func_obj=func_obj,
+                    target,
+                    func_obj,
                 )
 
             case _:
@@ -592,18 +559,12 @@ class Analysis:
 
         if output == OutputMode.Printed:
             self.render_sliced_output(
-                sliced_func=sliced_func,
-                output_mode=OutputMode.Printed,
-                func_obj=func_obj,
-                propagated_vars=propagated_vars,
+                sliced_func, OutputMode.Printed, func_obj, propagated_vars
             )
 
         elif output == OutputMode.Returned:
             tainted_locs, func_name, tainted_vars = self.render_sliced_output(
-                sliced_func=sliced_func,
-                output_mode=OutputMode.Returned,
-                func_obj=func_obj,
-                propagated_vars=propagated_vars,
+                sliced_func, OutputMode.Returned, func_obj, propagated_vars
             )
 
             return tainted_locs, func_name, tainted_vars
@@ -737,7 +698,7 @@ class Analysis:
                     # Recurse deeper
                     _recurse_slice(callee_func.name, callee_param, callee_addr)
 
-        # Entry point: perform initial slice
+        # Perform initial slice
         try:
             slice_data, og_func_name, propagated_vars = self.tainted_slice(
                 target=target,
@@ -1034,32 +995,32 @@ class Analysis:
                         elif offset_variable:
                             tainted_variables.add(
                                 TaintedVarOffset(
-                                    variable=addr_var,
-                                    offset=offset,
-                                    offset_var=TaintedVar(
-                                        variable=offset_variable,
-                                        confidence_level=TaintConfidence.NotTainted,
-                                        loc_address=loc.address,
+                                    addr_var,
+                                    offset,
+                                    TaintedVar(
+                                        offset_variable,
+                                        TaintConfidence.NotTainted,
+                                        loc.address,
                                     ),
-                                    confidence_level=TaintConfidence.Tainted,
-                                    loc_address=loc.address,
-                                    targ_function=function_node,
+                                    TaintConfidence.Tainted,
+                                    loc.address,
+                                    function_node,
                                 )
                             )
 
                         else:
                             tainted_variables.add(
                                 TaintedVarOffset(
-                                    variable=(
+                                    (
                                         addr_var
                                         if isinstance(addr_var, Variable)
                                         else addr_var
                                     ),
-                                    offset=offset,
-                                    offset_var=None,
-                                    confidence_level=TaintConfidence.Tainted,
-                                    loc_address=loc.address,
-                                    targ_function=function_node,
+                                    offset,
+                                    None,
+                                    TaintConfidence.Tainted,
+                                    loc.address,
+                                    function_node,
                                 )
                             )
 
@@ -1321,9 +1282,7 @@ class Analysis:
                             if text_section.start <= func.start < text_section.end:
                                 if func_symbol in func.name.lower():
                                     return self.trace_function_taint(
-                                        function_node=func,
-                                        tainted_params=tainted_param,
-                                        binary_view=lib_binary_view,
+                                        func, tainted_param, lib_binary_view
                                     )
 
         return None
