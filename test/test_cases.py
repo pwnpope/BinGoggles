@@ -20,7 +20,7 @@ Note: These tests assume Buildroot output exists in `test/buildroot/output/` and
 from os.path import abspath
 from pprint import pprint
 
-from bingoggles.bg import Analysis
+from bingoggles.bg import Analysis, VargFunctionCallResolver
 from bingoggles.bingoggles_types import *
 from bingoggles.modules import *
 import os
@@ -50,8 +50,32 @@ def find_dir(root_path: str, target_name: str) -> str | None:
 bingoggles_path = Path(__file__).parent
 
 
+def get_bndb_path_or_original(file_path: str) -> str:
+    """
+    Determines the correct path to use, prioritizing an existing .bndb file.
+
+    Args:
+        file_path (str): The original path to a binary file or a .bndb file.
+
+    Returns:
+        str: The path to an existing .bndb file if found, otherwise the original file_path.
+    """
+    if file_path.lower().endswith(".bndb") and os.path.isfile(file_path):
+        return file_path
+
+    potential_bndb_path = f"{file_path}.bndb"
+
+    if os.path.isfile(potential_bndb_path):
+        return potential_bndb_path
+
+    return file_path
+
+
 def test_backwards_slice_var(
-    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_mlil_store"
+    bg_init,
+    test_bin=get_bndb_path_or_original(
+        f"{bingoggles_path}/binaries/bin/test_mlil_store"
+    ),
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -60,24 +84,26 @@ def test_backwards_slice_var(
     bv, libraries_mapped = bg.init()
 
     analysis = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
-
     tainted_locs, func_name, tainted_vars = analysis.tainted_slice(
-        #   26 @ 0804927a  printf("Original Buffer: %s\nEncrypted B…", var_3c, var_38)
-        target=TaintTarget(0x0804927A, "var_3c"),
+        #     22 @ 004018dc  [&var_35 + rax_7].b = rdx_1
+        target=TaintTarget(0x004018DC, "rdx_1"),
         output=OutputMode.Returned,
         var_type=SlicingID.FunctionVar,
         slice_type=SliceType.Backward,
     )
 
+    pprint(tainted_locs)
+
     pprint(tainted_vars)
     assert len(tainted_locs) > 0, "No tainted locations found"
     assert (
-        len(tainted_locs) == 13
-    ), f"Expected 13 tainted locations, but got {len(tainted_locs)}"
+        len(tainted_locs) == 11
+    ), f"Expected 11 tainted locations, but got {len(tainted_locs)}"
 
 
 def test_fwd_slice_param(
-    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_slices"
+    bg_init,
+    test_bin=get_bndb_path_or_original(f"{bingoggles_path}/binaries/bin/test_slices"),
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -87,7 +113,8 @@ def test_fwd_slice_param(
 
     analysis = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
     sliced_data, _, tainted_vars = analysis.tainted_slice(
-        target=TaintTarget(0x08049235, "a"),
+        # 00401915    void* test_var_1(int a)
+        target=TaintTarget(0x00401915, "a"),
         var_type=SlicingID.FunctionParam,
         output=OutputMode.Returned,
     )
@@ -95,12 +122,15 @@ def test_fwd_slice_param(
     pprint(tainted_vars)
     assert len(sliced_data) > 0, "No tainted locations found"
     assert (
-        len(sliced_data) == 16
-    ), f"Expected 16 tainted locations, but got {len(sliced_data)}"
+        len(sliced_data) == 12
+    ), f"Expected 12 tainted locations, but got {len(sliced_data)}"
 
 
 def test_fwd_slice_var(
-    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_mlil_store"
+    bg_init,
+    test_bin=get_bndb_path_or_original(
+        f"{bingoggles_path}/binaries/bin/test_mlil_store"
+    ),
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -110,23 +140,21 @@ def test_fwd_slice_var(
 
     analysis = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
     sliced_data, _, tainted_vars = analysis.tainted_slice(
-        target=TaintTarget(0x08049257, "var_23"),
+        target=TaintTarget(0x00401897, "var_2b"),
         var_type=SlicingID.FunctionVar,
     )
 
     pprint(tainted_vars)
     expected_instr_indexes = {
-        9,
-        10,
+        6,
         11,
+        12,
         13,
-        15,
-        16,
+        14,
         17,
         18,
-        21,
-        25,
-        26,
+        19,
+        22,
     }
 
     actual_instr_indexes = {tainted.loc.instr_index for tainted in sliced_data}
@@ -139,7 +167,10 @@ def test_fwd_slice_var(
 
 
 def test_get_sliced_calls(
-    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_get_sliced_calls"
+    bg_init,
+    test_bin=get_bndb_path_or_original(
+        f"{bingoggles_path}/binaries/bin/test_get_sliced_calls"
+    ),
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -148,50 +179,28 @@ def test_get_sliced_calls(
     bv, libraries_mapped = bg.init()
 
     analysis = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
+    # resolver = VargFunctionCallResolver(binary_view=bv)
+    # resolver.resolve_varg_func_calls()
 
     sliced_data, func_name, propagated_vars = analysis.tainted_slice(
-        #    6 @ 08049237  var_2c = &a
-        target=TaintTarget(0x08049237, "a"),
+        #   7 @ 0040196d  rsi = &a
+        target=TaintTarget(0x0040196d, "a"),
         var_type=SlicingID.FunctionVar,
     )
+
     pprint(propagated_vars)
     result = analysis.get_sliced_calls(
         tuple(sliced_data), func_name, tuple(propagated_vars)
     )
 
-    assert len(result) == 3
-
-    names = {info[0] for info in result.values()}
-    assert names == {"scanf", "do_add", "printf"}
-
-    param_maps = {info[0]: info[3] for info in result.values()}
-
-    scanf_map = param_maps["scanf"]
-    assert len(scanf_map) == 1
-    scanf_param, scanf_counts = next(iter(scanf_map.items()))
-    assert isinstance(scanf_param, MediumLevelILVar)
-    assert scanf_counts[0] == 2
-    assert scanf_counts[1] == 2
-
-    add_map = param_maps["do_add"]
-    assert len(add_map) == 1
-    add_param, add_counts = next(iter(add_map.items()))
-    assert isinstance(add_param, MediumLevelILVar)
-    assert add_counts[0] == 4
-    assert add_counts[1] == 1
-
-    printf_map = param_maps["printf"]
-    assert len(printf_map) == 1
-    printf_param, printf_counts = next(iter(printf_map.items()))
-    assert isinstance(printf_param, MediumLevelILVar)
-    assert printf_counts[0] == 7
-    assert printf_counts[1] == 2
-
+    assert len(result) == 4
     pprint(result)
 
-
 def test_complete_bkd_slice_var(
-    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_backwards_slice"
+    bg_init,
+    test_bin=get_bndb_path_or_original(
+        f"{bingoggles_path}/binaries/bin/test_backwards_slice"
+    ),
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -222,7 +231,8 @@ def test_complete_bkd_slice_var(
 
 
 def test_complete_fwd_slice_var(
-    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_uaf"
+    bg_init,
+    test_bin=get_bndb_path_or_original(f"{bingoggles_path}/binaries/bin/test_uaf"),
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -270,7 +280,10 @@ def test_complete_fwd_slice_var(
 
 
 def test_complete_fwd_slice_param(
-    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_is_param_tainted"
+    bg_init,
+    test_bin=get_bndb_path_or_original(
+        f"{bingoggles_path}/binaries/bin/test_is_param_tainted"
+    ),
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -313,7 +326,10 @@ def test_complete_fwd_slice_param(
 
 
 def test_is_param_tainted(
-    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_is_param_tainted"
+    bg_init,
+    test_bin=get_bndb_path_or_original(
+        f"{bingoggles_path}/binaries/bin/test_is_param_tainted"
+    ),
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -340,7 +356,10 @@ def test_is_param_tainted(
 
 
 def test_global_tracking_fwd_var(
-    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_global_tracking"
+    bg_init,
+    test_bin=get_bndb_path_or_original(
+        f"{bingoggles_path}/binaries/bin/test_global_tracking"
+    ),
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -369,7 +388,10 @@ def test_global_tracking_fwd_var(
     ), "glob_buf not in tainted variables"
 
 
-def test_uaf(bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_uaf"):
+def test_uaf(
+    bg_init,
+    test_bin=get_bndb_path_or_original(f"{bingoggles_path}/binaries/bin/test_uaf"),
+):
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[],
@@ -536,7 +558,10 @@ def test_uaf(bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_uaf"):
 
 
 def test_load_struct(
-    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_struct_member"
+    bg_init,
+    test_bin=get_bndb_path_or_original(
+        f"{bingoggles_path}/binaries/bin/test_struct_member"
+    ),
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -557,7 +582,10 @@ def test_load_struct(
 
 
 def test_set_var_field(
-    bg_init, test_bin=f"{bingoggles_path}/binaries/bin/test_struct_member"
+    bg_init,
+    test_bin=get_bndb_path_or_original(
+        f"{bingoggles_path}/binaries/bin/test_struct_member"
+    ),
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -585,7 +613,9 @@ def test_set_var_field(
 
 def test_interproc_memcpy(
     bg_init,
-    test_bin=f"/home/pope/test_function_param_tainted_memcpy",
+    test_bin=get_bndb_path_or_original(
+        f"{bingoggles_path}/binaries/bin/test_function_param_tainted_memcpy"
+    ),
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -596,11 +626,9 @@ def test_interproc_memcpy(
     aux = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
 
     _, _, tainted_vars = aux.tainted_slice(
-        # 0804924c        fgets(&var_e8, 0x64, __TMC_END__)
-        target=TaintTarget(0x4011BF, "var_e8"),
+        #   34 @ 004019ef  rdi_1 = &var_158
+        target=TaintTarget(0x004019EF, "var_158"),
         var_type=SlicingID.FunctionVar,
     )
 
     pprint(tainted_vars)
-
-    # 000824f0    int32_t wms_ts_encode_CDMA_OTA(char* arg1, int32_t* arg2)

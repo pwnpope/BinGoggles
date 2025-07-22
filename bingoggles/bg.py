@@ -15,9 +15,151 @@ from .bingoggles_types import *
 from .auxiliary import *
 from binaryninja.enums import MediumLevelILOperation
 from binaryninja import BinaryView
+from binaryninja.mediumlevelil import MediumLevelILCall
 from collections import OrderedDict
 from typing import List, Union
 from .function_registry import get_modeled_function_index, modeled_functions
+from tqdm import tqdm
+
+
+class VargFunctionCallResolver:
+    def __init__(self, binary_view: BinaryView, verbose: bool = True):
+        self.bv = binary_view
+        self.verbose = verbose
+
+    def save_patches_made_to_bndb(self, output_bndb_path: str = None) -> None:
+        """
+        Save the current state of the BinaryView to a .bndb database file.
+
+        If no output path is provided, the function will use the original filename with a .bndb extension.
+        This function is typically used after making modifications or patches to the binary, ensuring that
+        all changes are persisted in a Binary Ninja database file.
+
+        Args:
+            bv (BinaryView): The Binary Ninja BinaryView object representing the binary.
+            output_bndb_path (str, optional): The path where the .bndb file should be saved. If None,
+                the function will derive the path from the original filename.
+        """
+
+        """
+        
+                if resolve_varg_calls:
+                if len(varg_functions_to_resolve) > 0:
+                    self.resolve_varg_func_calls(varg_functions_to_resolve)
+                else:
+                    self.resolve_varg_func_calls()
+
+        """
+
+        if output_bndb_path is None:
+            if self.bv.file.original_filename[-5:] == ".bndb":
+                output_bndb_path = self.bv.file.original_filename
+            else:
+                output_bndb_path = self.bv.file.original_filename + ".bndb" if not self.bv.file.original_filename.endswith(".bndb") else self.bv.file.original_filename
+        
+        success = self.bv.file.create_database(output_bndb_path, None, None)
+        if success:
+            print(f"Successfully saved BinaryView to {output_bndb_path}")
+        else:
+            print(f"Failed to save BinaryView to {output_bndb_path}")
+
+    def resolve_and_patch(self, resolved: List[FunctionModel], function_object: Function, mlil_loc: MediumLevelILInstruction) -> Union[FunctionModel, None]:
+        """
+        Resolve and patch a modeled variadic function call if it matches a known model.
+
+        Args:
+            resolved (List[FunctionModel]): A list of already resolved function models to avoid duplicates.
+            function_object (Function): The Binary Ninja function object containing the call.
+            mlil_loc (MediumLevelILInstruction): The MLIL instruction representing the function call.
+
+        Returns:
+            FunctionModel or None: The resolved function model if a new one was found and patched, otherwise None.
+        """
+        section = self.bv.get_sections_at(function_object.start)
+        if section:
+            name = section[0].name
+            if name == ".synthetic_builtins":
+                return None
+
+        model = resolve_modeled_variadic_function(function_object, mlil_loc)
+        if model and model not in resolved:
+            patch_function_params(function_object, mlil_loc, model)
+            resolved.append(model)
+            return model
+
+        return None
+
+    def is_in_text_section(self, function_object: Function) -> bool:
+        """
+        Check if the given function is located within the .text section of the binary.
+
+        Args:
+            function_object (Function): The Binary Ninja function object to check.
+
+        Returns:
+            bool: True if the function is in the .text section, False otherwise.
+        """
+        text_section = self.bv.sections.get(".text")
+        if not text_section:
+            return False
+
+        function_start_address = function_object.start
+        text_section_start = text_section.start
+        text_section_end = text_section.end
+
+        return text_section_start <= function_start_address < text_section_end
+
+    def resolve_varg_func_calls(self, functions_to_resolve: list = [], output_path: str = None) -> None:
+        """
+        Resolves variadic function calls within specified functions or all functions in the binary view.
+
+        Args:
+            functions_to_resolve (list, optional): A list of function objects to process.
+                                                   If empty, all functions in the binary view
+                                                   (`self.bv.functions`) will be processed.
+                                                   Defaults to an empty list.
+
+        A loading bar is displayed to show the progress of the resolution process.
+        """
+        resolved = []
+        functions_to_iterate = 0
+        if not functions_to_resolve:
+            functions_to_iterate = self.bv.functions
+        else:
+            functions_to_iterate = functions_to_resolve
+
+        if self.verbose:
+            iterator = tqdm(functions_to_iterate, desc="Resolving variadic calls")
+        else:
+            iterator = functions_to_iterate
+
+        for function_object in iterator:
+            if self.is_in_text_section(function_object): 
+                for block in function_object.medium_level_il:
+                    for mlil_loc in block:
+                        if isinstance(mlil_loc, MediumLevelILCall):
+                            self.resolve_and_patch(resolved, function_object, mlil_loc)
+
+        if output_path:
+            self.save_patches_made_to_bndb(output_path)
+        else:
+            self.save_patches_made_to_bndb()
+
+    def resolve(self, varg_functions_to_resolve: list = []) -> None:
+        """
+        Resolve all variadic function calls in the current BinaryView.
+        
+        Args:
+            varg_functions_to_resolve (list, optional): An optional list of function objects to resolve.
+        """
+        if len(varg_functions_to_resolve) > 0:
+            self.resolve_varg_func_calls(varg_functions_to_resolve)
+        else:
+            self.resolve_varg_func_calls()
+
+        self.resolve_varg_func_calls(self.bv.functions)
+
+    
 
 
 class Analysis:
@@ -112,7 +254,7 @@ class Analysis:
 
             if int(loc.operation) == int(MediumLevelILOperation.MLIL_CALL):
                 param_map = param_var_map(loc.params, propagated_vars)
-                call_function_object = addr_to_func(self.bv, int(str(loc.dest), 16))
+                call_function_object = addr_to_func(self.bv, loc.dest.value.value)
                 if call_function_object:
                     function_addr = call_function_object.start
                     call_name = call_function_object.name
@@ -485,29 +627,26 @@ class Analysis:
         slice_type: SliceType = SliceType.Forward,
     ) -> Union[tuple[list, str, list[Variable]], None]:
         """
-        Perform a taint analysis slice (forward or backward) from a specified target variable.
+        Run a forward or backward taint analysis slice from a given variable..
 
-        This function identifies and traces the propagation of a variable (local, global,
-        struct member, or function parameter) through a function using either forward or
-        backward slicing. It returns a list of program locations affected by the variable
-        and a list of propagated variables.
+        Traces the propagation of a target variable (local, global, struct member, or function parameter)
+        within a single function, using either forward or backward slicing. Returns the list of tainted
+        instructions, the function name, and the propagated variables.
 
         Args:
-            target (TaintTarget): The target variable to slice from, including its name and location.
-            var_type (SlicingID): The classification of the target variable
-                (FunctionVar, GlobalVar, StructMember, or FunctionParam).
-            output (OutputMode, optional): Whether to print the slice results or return them.
-                Defaults to OutputMode.Returned.
-            slice_type (SliceType, optional): Direction of the slice (Forward or Backward).
-                Defaults to SliceType.Forward.
-
+            target (TaintTarget): The variable or memory location to start slicing from.
+            var_type (SlicingID): The type of the target (FunctionVar, GlobalVar, StructMember, FunctionParam).
+            output (OutputMode, optional): Whether to print or return the slice results. Default is Returned.
+            slice_type (SliceType, optional): Slicing direction (Forward or Backward). Default is Forward.
+            
         Returns:
-            tuple[list, str, list[Variable]] | None:
-                - A list of `TaintedLOC` objects representing the instructions visited during the slice.
-                - The name of the function containing the slice.
-                - A list of variables propagated during the slice.
-                Returns `None` if the analysis fails due to unresolved instruction or function context.
+            tuple[list, str, list]:
+                - List of TaintedLOC objects (instructions visited during the slice)
+                - Name of the function containing the slice
+                - List of propagated variables
+            Returns None if the analysis fails (e.g., unresolved instruction or function context).
         """
+
         if hasattr(target.loc_address, "start"):
             func_obj = target.loc_address
 
@@ -515,7 +654,7 @@ class Analysis:
             func_obj = addr_to_func(self.bv, target.loc_address)
             if func_obj is None:
                 print(
-                    f"[{Fore.RED}Error{Fore.RESET}] Could not find a function containing address: {target.loc_address}"
+                    f"[{Fore.RED}Error{Fore.RESET}] Could not find a function containing address: {target.loc_address:#0x}"
                 )
                 return None
 
@@ -548,8 +687,7 @@ class Analysis:
 
             case SlicingID.FunctionParam:
                 sliced_func, propagated_vars = self.init_function_param_trace(
-                    target,
-                    func_obj,
+                    target, func_obj
                 )
 
             case _:
@@ -561,7 +699,7 @@ class Analysis:
             self.render_sliced_output(
                 sliced_func, OutputMode.Printed, func_obj, propagated_vars
             )
-
+        
         elif output == OutputMode.Returned:
             tainted_locs, func_name, tainted_vars = self.render_sliced_output(
                 sliced_func, OutputMode.Returned, func_obj, propagated_vars
@@ -584,26 +722,27 @@ class Analysis:
         analyze_imported_functions=False,
     ) -> OrderedDict:
         """
-        Perform a complete interprocedural taint slice, recursively tracking taint propagation across function calls.
+        Run a complete interprocedural taint slice, recursively tracking taint across function calls.
 
-        Starting from the given taint target (a function variable or parameter), this method traces how taint spreads
-        through MLIL instructions and across function boundaries where tainted values are passed as arguments.
-        The slice forms a call graph-like structure showing the path of taint propagation.
+        Traces taint propagation from a starting variable or parameter, following its flow through MLIL instructions
+        and across function boundaries. Produces a call graph-like structure showing all taint paths, optionally
+        including imported functions and resolving variadic calls if requested.
 
         Args:
-            target (TaintTarget): Starting point of the taint slice (address and variable).
-            var_type (SlicingID): Type of the target (FunctionVar or FunctionParam).
-            slice_type (SliceType, optional): Direction of slicing: Forward or Backward. Defaults to Forward.
-            output (OutputMode, optional): Whether to return or print results. Defaults to Returned.
-            analyze_imported_functions (bool, optional): Whether to recurse into imported functions. Defaults to False.
+            target (TaintTarget): The starting address and variable for the slice.
+            var_type (SlicingID): The type of the target (FunctionVar or FunctionParam).
+            slice_type (SliceType, optional): Slicing direction (Forward or Backward). Default is Forward.
+            output (OutputMode, optional): Whether to print or return results. Default is Returned.
+            analyze_imported_functions (bool, optional): Recurse into imported functions if True. Default is False.
 
         Returns:
-            OrderedDict: Maps (function_name, variable) to (tainted_locations, propagated_vars), e.g.:
-
-                {
-                    ("deeper_function", rdi): ([TaintedLOC, ...], [TaintedVar, ...]),
-                    ...
-                }
+            OrderedDict:
+                Maps (function_name, variable) to (tainted_locations, propagated_vars), e.g.:
+                    {
+                        ("function", rdi): ([TaintedLOC, ...], [TaintedVar, ...]),
+                        ...
+                    }
+            If the analysis fails, returns an empty OrderedDict.
         """
         propagation_cache = (
             OrderedDict()
@@ -904,7 +1043,6 @@ class Analysis:
 
         if self.verbose and not self.trace_function_taint_printed:
             print(
-                # f"\n{Fore.LIGHTRED_EX}trace_function_taint{Fore.RESET}({Fore.MAGENTA}self, function_node: int | Function, "
                 f"tainted_params: Variable | str | list[Variable]{Fore.RESET})\n-> {Fore.LIGHTBLUE_EX}{function_node}"
                 f"{Fore.RESET}:{Fore.BLUE}{tainted_params}{Fore.RESET}\n{Fore.GREEN}{'='*113}{Fore.RESET}"
             )
@@ -1044,7 +1182,10 @@ class Analysis:
                             if isinstance(param, MediumLevelILVarSsa)
                         ]
 
-                        call_object = addr_to_func(binary_view, int(str(loc.dest), 16))
+                        call_object = addr_to_func(
+                            binary_view,
+                            instr.dest.value.value,
+                        )
 
                         if self.verbose:
                             print(

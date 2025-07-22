@@ -111,7 +111,7 @@ class UseAfterFreeDetection:
 
                 try:
                     func_obj = self.bv.get_functions_containing(
-                        int(str(t_loc.loc.dest), 16)
+                        t_loc.loc.dest.value.value
                     )[0]
 
                 except IndexError:
@@ -183,7 +183,7 @@ class UseAfterFreeDetection:
                     continue
 
                 try:
-                    subfn = self.bv.get_functions_containing(int(str(loc.dest), 16))[0]
+                    subfn = self.bv.get_functions_containing(loc.dest.value.value)[0]
                 except IndexError:
                     continue
 
@@ -317,7 +317,7 @@ class UseAfterFreeDetection:
                     ) == int(MediumLevelILOperation.MLIL_CALL):
                         try:
                             func = self.bv.get_functions_containing(
-                                int(str(loc.dest), 16)
+                                loc.dest.value.value
                             )[0]
                         except IndexError:
                             continue
@@ -468,7 +468,7 @@ class UseAfterFreeDetection:
             if int(tainted_loc.loc.operation) == int(MediumLevelILOperation.MLIL_CALL):
                 try:
                     func = self.bv.get_functions_containing(
-                        int(str(tainted_loc.loc.dest), 16)
+                        tainted_loc.loc.dest.value.value
                     )[0]
                 except IndexError:
                     continue

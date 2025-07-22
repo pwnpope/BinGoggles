@@ -1,6 +1,8 @@
 from .bingoggles_types import FunctionModel
 from typing import Union
-from binaryninja import Function, MediumLevelILInstruction
+from binaryninja import Function, MediumLevelILInstruction, SymbolType
+from functools import cache
+
 
 modeled_functions = [
     FunctionModel("strcpy", [1], [0], True),
@@ -52,7 +54,7 @@ modeled_functions = [
     FunctionModel("vsprintf", [], [0], True, True, 2),
     FunctionModel("swscanf", [0], [2], False, True, 2),
     # we're adding functions here that dont taint anything, we dont want to do any analysis on them.
-    FunctionModel("printf", [], [], False, False),
+    FunctionModel("printf", [], [], False, False, 1),
 ]
 
 modeled_functions_names = [i.name for i in modeled_functions]
@@ -81,18 +83,24 @@ def normalize_func_name(name: str) -> str:
     """
     Normalize a function name by stripping common compiler or internal prefixes.
 
-    This includes:
-    - '__builtin_' for compiler intrinsics (e.g., '__builtin_strcpy' → 'strcpy')
-    - '__' for glibc internal aliases (e.g., '__getdelim' → 'getdelim')
-    - '_' for lightly mangled names (e.g., '_strncpy' → 'strncpy')
-
     Args:
         name (str): The raw function name as seen in the binary.
 
     Returns:
         str: A normalized function name suitable for lookup in the libc taint model.
     """
-    for prefix in ("__builtin_", "__", "_", "__isoc99_"):
+    common_prefixes = [
+        "__builtin_",  # Binja builtins (e.g., __builtin_memcpy)
+        "__libc_",  # GNU C Library internals
+        "__GI_",  # GNU C Library Global Internal
+        "_imp__",  # Windows import thunks (e.g., _imp__printf)
+        "__isoc99_",  # ISO C99 specifics
+        "_IO_",  # Standard I/O library internals (e.g., _IO_getc)
+        "__new_",  # Related to new operator
+        "__",  # Double underscore (general compiler/internal)
+        "_",  # Single underscore (general, often for internal or static)
+    ]
+    for prefix in common_prefixes:
         if name.startswith(prefix):
             return name[len(prefix) :]
     return name
@@ -118,10 +126,10 @@ def get_function_model(name: str) -> Union[FunctionModel, None]:
             return func
     return None
 
-
+@cache
 def get_modeled_function_name_at_callsite(
     function_object: Function, mlil_loc: MediumLevelILInstruction
-):
+) -> Union[str, None]:
     """
     Given an MLIL call instruction, return the normalized name of the called function
     if it matches one of the known modeled functions.
@@ -137,8 +145,26 @@ def get_modeled_function_name_at_callsite(
     Returns:
         str | None: The normalized name of the matched modeled function, or None if no match is found.
     """
-    function = function_object.view.get_function_at(int(mlil_loc.dest.value.value))
-    function_name = function.name
-    normalized_name = normalize_func_name(function_name)
-    if normalized_name in [func.name for func in modeled_functions]:
-        return normalized_name
+    bv = function_object.view
+    function = bv.get_function_at(mlil_loc.dest.value.value)
+    function_name = None
+    if function:
+        function_name = function.name
+        normalized_name = normalize_func_name(function_name)
+        if normalized_name in [func.name for func in modeled_functions]:
+            return normalized_name
+
+    start = bv.get_section_by_name(".synthetic_builtins").start
+    end = bv.get_section_by_name(".synthetic_builtins").end
+    symbol = bv.get_symbol_at(mlil_loc.dest.value.value)
+    if symbol and symbol.type.value == SymbolType.SymbolicFunctionSymbol.value:
+        function_name = bv.get_symbol_at(mlil_loc.dest.value.value).name
+
+        for addr in range(start, end, 8):
+            builtin_function = bv.get_symbol_at(addr)
+            if builtin_function and builtin_function.name == function_name:
+                normalized_builtin_name = normalize_func_name(builtin_function.name)
+                if normalized_builtin_name in [func.name for func in modeled_functions]:
+                    return normalized_builtin_name
+
+    return None

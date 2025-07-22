@@ -198,7 +198,9 @@ class TaintedVarOffset:
         self,
         variable: Variable,
         offset: int,
-        offset_var: TaintedVar,
+        offset_var: Union[
+            TaintedVar, TaintedGlobal, "TaintedVarOffset", "TaintedStructMember"
+        ],
         confidence_level: TaintConfidence,
         loc_address: int,
         targ_function: Function,
@@ -273,7 +275,7 @@ class TaintedVarOffset:
         if self.offset_var is None:
             # Case: simple var + constant offset
             return (
-                f"[&{Fore.CYAN}{self.variable}{Fore.RESET} + {Fore.CYAN}{self.offset}{Fore.RESET}] -> "
+                f"[&{Fore.CYAN}{self.variable}{Fore.RESET} + {Fore.CYAN}{self.offset:#0x}{Fore.RESET}] -> "
                 f"[{taint_status}]"
             )
 
@@ -285,7 +287,7 @@ class TaintedVarOffset:
             )
         else:
             return (
-                f"[&{Fore.CYAN}{self.variable}{Fore.RESET}:{Fore.CYAN}{self.offset}{Fore.RESET} + "
+                f"[&{Fore.CYAN}{self.variable}{Fore.RESET}:{Fore.CYAN}{self.offset:#0x}{Fore.RESET} + "
                 f"{Fore.CYAN}{self.offset_var.variable}{Fore.RESET}] -> "
                 f"[{taint_status}]"
             )
@@ -587,28 +589,26 @@ class TaintedLOC:
         self,
         loc: MediumLevelILInstruction,  # Line of code
         addr: int,  # Address of the LOC
-        target_var: (
-            TaintedVar | TaintedVarOffset | TaintedGlobal | TaintedStructMember
-        ),  # Target variable that we found this LOC with, (the variable we're tracking)
-        propagated_var: (
+        target_var: Union[
+            TaintedVar, TaintedVarOffset, TaintedGlobal, TaintedStructMember
+        ],  # Target variable that we found this LOC with, (the variable we're tracking)
+        propagated_var: Union[
             Variable | None
-        ),  # Variable where target_var gets its data from (connected variable)
+        ],  # Variable where target_var gets its data from (connected variable)
         taint_confidence: TaintConfidence,  # Confidence level of the LOC being tainted
         function_object: Function,  # Binary ninja function object
     ):
-        self.loc: MediumLevelILInstruction = loc
-        self.target_var: (
-            TaintedVar | TaintedVarOffset | TaintedGlobal | TaintedStructMember
-        ) = target_var
-        self.propagated_var: Variable | None = propagated_var
-        self.taint_confidence: TaintConfidence = taint_confidence
-        self.addr: int = addr
-        self.function_object: Function = function_object
+        self.loc = loc
+        self.target_var = target_var
+        self.propagated_var = propagated_var
+        self.taint_confidence = taint_confidence
+        self.addr = addr
+        self.function_object = function_object
 
     def __repr__(self):
         if int(self.loc.operation) == int(MediumLevelILOperation.MLIL_CALL):
             function = self.function_object.view.get_function_at(
-                int(self.loc.dest.value.value)
+                self.loc.dest.value.value
             )
             function_name = (
                 function.name if function else f"{self.loc.dest.value.value:#0x}"
@@ -659,7 +659,7 @@ class FunctionModel:
         taint_destinations: list[int],
         taints_return: bool,
         taints_varargs: bool = False,
-        vararg_start_index: int = None,
+        vararg_start_index: Union[int, None] = None,
     ):
         self.name = name
         self.taint_sources = taint_sources
