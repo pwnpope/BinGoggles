@@ -48,16 +48,6 @@ class VargFunctionCallResolver:
                 the function will derive the path from the original filename.
         """
 
-        """
-        
-                if resolve_varg_calls:
-                if len(varg_functions_to_resolve) > 0:
-                    self.resolve_varg_func_calls(varg_functions_to_resolve)
-                else:
-                    self.resolve_varg_func_calls()
-
-        """
-
         if output_bndb_path is None:
             if self.bv.file.original_filename[-5:] == ".bndb":
                 output_bndb_path = self.bv.file.original_filename
