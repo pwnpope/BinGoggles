@@ -961,11 +961,6 @@ class Analysis:
         Perform interprocedural taint analysis to determine whether any parameters or the return value
         of a function are tainted, directly or indirectly.
 
-        Starting from one or more tainted parameters, this method analyzes the taint flow within a
-        function and recursively into any functions it calls. Taint is propagated through variable
-        assignments, field accesses, and calls, and the analysis tracks whether taint returns to
-        the caller or spreads to other parameters.
-
         Args:
             function_node (int | Function): Target function for analysis, provided as either a function start address or a Binary Ninja `Function` object.
             tainted_params (Variable | str | list[Variable]): One or more parameters to treat as initially tainted. Accepts a single `Variable`, parameter name (`str`), or a list of `Variable` objects.
@@ -982,9 +977,6 @@ class Analysis:
                 - `original_tainted_variables` (list[TaintedVar]): The original tainted input(s).
                 - `is_return_tainted` (bool): True if the function's return value is tainted.
                 - `tainted_param_map` (dict): A mapping of input parameters to any other parameters they taint.
-
-        Raises:
-            ValueError: If the provided function address cannot be resolved to a valid function.
         """
         if tainted_param_map is None:
             tainted_param_map = {}
