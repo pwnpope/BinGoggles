@@ -23,6 +23,13 @@ from tqdm import tqdm
 
 
 class VargFunctionCallResolver:
+    """
+    A class to resolve and patch variadic function calls in a Binary Ninja BinaryView.
+
+    Args:
+        binary_view (BinaryView): The Binary Ninja BinaryView object representing the binary.
+        verbose (bool): If True, enables verbose output during resolution and patching.
+    """
     def __init__(self, binary_view: BinaryView, verbose: bool = True):
         self.bv = binary_view
         self.verbose = verbose
