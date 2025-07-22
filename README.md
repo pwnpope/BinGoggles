@@ -1,7 +1,7 @@
 
 <img align="right" src="images/logo.jpeg" alt="BinGoggles LOGO" width="250" heigh="250">
 
-# Introducing BinGoggles
+# `BinGoggles` the variable flow engine
 BinGoggles is a static taint analysis framework for Binary Ninja. It tracks variable flow both *within* and *across* functions supporting full inter/intraprocedural slicing, including globals, structs, and function parameters.
 
 Want to write your own analysis? Start with `bingoggles/modules.py` it shows how UAF detection was built using the core engine.
