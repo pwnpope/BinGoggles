@@ -126,6 +126,7 @@ def get_function_model(name: str) -> Union[FunctionModel, None]:
             return func
     return None
 
+
 @cache
 def get_modeled_function_name_at_callsite(
     function_object: Function, mlil_loc: MediumLevelILInstruction

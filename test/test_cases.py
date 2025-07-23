@@ -74,7 +74,7 @@ def get_bndb_path_or_original(file_path: str) -> str:
 def test_backwards_slice_var(
     bg_init,
     test_bin=get_bndb_path_or_original(
-        f"{bingoggles_path}/binaries/bin/test_mlil_store"
+        f"{bingoggles_path}/binaries/bin/test_mlil_store.bndb"
     ),
 ):
     bg = bg_init(
@@ -97,13 +97,15 @@ def test_backwards_slice_var(
     pprint(tainted_vars)
     assert len(tainted_locs) > 0, "No tainted locations found"
     assert (
-        len(tainted_locs) == 11
-    ), f"Expected 11 tainted locations, but got {len(tainted_locs)}"
+        len(tainted_locs) == 12
+    ), f"Expected 12 tainted locations, but got {len(tainted_locs)}"
 
 
 def test_fwd_slice_param(
     bg_init,
-    test_bin=get_bndb_path_or_original(f"{bingoggles_path}/binaries/bin/test_slices"),
+    test_bin=get_bndb_path_or_original(
+        f"{bingoggles_path}/binaries/bin/test_slices.bndb"
+    ),
 ):
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -179,12 +181,10 @@ def test_get_sliced_calls(
     bv, libraries_mapped = bg.init()
 
     analysis = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
-    # resolver = VargFunctionCallResolver(binary_view=bv)
-    # resolver.resolve_varg_func_calls()
 
     sliced_data, func_name, propagated_vars = analysis.tainted_slice(
         #   7 @ 0040196d  rsi = &a
-        target=TaintTarget(0x0040196d, "a"),
+        target=TaintTarget(0x0040196D, "a"),
         var_type=SlicingID.FunctionVar,
     )
 
@@ -195,6 +195,7 @@ def test_get_sliced_calls(
 
     assert len(result) == 4
     pprint(result)
+
 
 def test_complete_bkd_slice_var(
     bg_init,
@@ -209,28 +210,26 @@ def test_complete_bkd_slice_var(
     bv, libraries_mapped = bg.init()
 
     analysis = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
-    resolver = VargFunctionCallResolver(binary_view=bv)
-    resolver.resolve_varg_func_calls()
 
-    # data = analysis.complete_slice(
-    #     target=TaintTarget(0x08049325, "var_13c"),
-    #     output=OutputMode.Returned,
-    #     var_type=SlicingID.FunctionVar,
-    #     slice_type=SliceType.Backward,
-    # )
+    data = analysis.complete_slice(
+        target=TaintTarget(0x08049325, "var_13c"),
+        output=OutputMode.Returned,
+        var_type=SlicingID.FunctionVar,
+        slice_type=SliceType.Backward,
+    )
 
-    # assert any(entry[0] == "main" for entry in data)
+    assert any(entry[0] == "main" for entry in data)
 
-    # main_entry = next(entry for entry in data if entry[0] == "main")
-    # assert "var_13c" in str(main_entry[1])
+    main_entry = next(entry for entry in data if entry[0] == "main")
+    assert "var_13c" in str(main_entry[1])
 
-    # main_trace, _ = data[main_entry]
+    main_trace, _ = data[main_entry]
 
-    # main_instr_indexes = {entry.loc.instr_index for entry in main_trace}
-    # assert main_instr_indexes >= {
-    #     15,
-    #     17,
-    # }, f"Missing expected instrs in main: {main_instr_indexes}"
+    main_instr_indexes = {entry.loc.instr_index for entry in main_trace}
+    assert main_instr_indexes >= {
+        15,
+        17,
+    }, f"Missing expected instrs in main: {main_instr_indexes}"
 
 
 def test_complete_fwd_slice_var(

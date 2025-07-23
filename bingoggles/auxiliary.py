@@ -7,6 +7,7 @@ from binaryninja.mediumlevelil import (
     MediumLevelILVar,
     MediumLevelILConst,
     MediumLevelILAddressOf,
+    MediumLevelILVarSsa,
 )
 from binaryninja.highlevelil import HighLevelILOperation, HighLevelILInstruction
 from colorama import Fore
@@ -55,9 +56,11 @@ def flat(
             flat_list.append(op)
     return flat_list
 
+
 @cache
 def resolve_modeled_variadic_function(
-    function_object: Function, mlil_loc: MediumLevelILInstruction,
+    function_object: Function,
+    mlil_loc: MediumLevelILInstruction,
 ) -> Union[FunctionModel, None]:
     """
     Determines if a called function should have its variadic arguments patched
@@ -93,7 +96,11 @@ def resolve_modeled_variadic_function(
     return None
 
 
-def patch_function_params(function_object: Function, mlil_loc: MediumLevelILInstruction, function_model: FunctionModel) -> None:
+def patch_function_params(
+    function_object: Function,
+    mlil_loc: MediumLevelILInstruction,
+    function_model: FunctionModel,
+) -> None:
     """
     Applies a programmatically determined variadic type to a Binary Ninja function.
 
@@ -108,13 +115,13 @@ def patch_function_params(function_object: Function, mlil_loc: MediumLevelILInst
     function_call_address = mlil_loc.dest.value.value
     call_func_object = function_object.view.get_function_at(function_call_address)
     varg_start_index = function_model.vararg_start_index
-    
+
     new_params = list(call_func_object.type.parameters)[:varg_start_index]
     return_type = call_func_object.type.return_value
     calling_convention = call_func_object.calling_convention
     if calling_convention is None:
         calling_convention = call_func_object.arch.default_calling_convention
-    
+
     new_func_type = types.FunctionBuilder.create(
         return_type=return_type,
         calling_convention=calling_convention,
@@ -123,6 +130,7 @@ def patch_function_params(function_object: Function, mlil_loc: MediumLevelILInst
     )
 
     call_func_object.set_user_type(new_func_type)
+
 
 """
 Since we'll be making changes it should ask the user if they want to save the changes to a new BNDB
@@ -785,54 +793,231 @@ def append_tainted_loc(
     )
 
 
-def append_tainted_var_by_type(
-    tainted_var: Union[MediumLevelILVar, MediumLevelILConstPtr],
+def find_load_store_data(
+    mlil_loc,
+    already_iterated: Union[list, set],
+    var_to_trace=None,
+) -> Union[int, Variable, SSAVariable, None]:
+    """for load/store operations"""
+    address_variable, var_offset = None, None
+    tainted_offset_var = None
+    addr_var = None
+    offset = None
+
+    if len(mlil_loc.dest.operands) == 1:
+        addr_var = mlil_loc.dest.operands[0]
+
+    elif len(mlil_loc.dest.operands) == 2:
+        address_variable, var_offset = mlil_loc.dest.operands
+        if isinstance(var_offset, MediumLevelILConst):
+            addr_var = address_variable
+            offset = var_offset
+            var_offset = None
+        else:
+            addr_var_operands = address_variable.operands
+            if len(addr_var_operands) == 2:
+                addr_var, var_offset = addr_var_operands
+
+            if isinstance(address_variable, MediumLevelILAddressOf):
+                addr_var = address_variable.src
+                offset = var_offset
+
+            elif isinstance(offset_variable, MediumLevelILVarSsa):
+                addr_var, offset_variable = mlil_loc.dest.operands
+                offset_variable = offset_variable.var
+
+            else:
+                if len(address_variable.operands) == 2:
+                    addr_var, offset = address_variable.operands
+
+                elif (
+                    len(address_variable.operands) == 1
+                    and len(mlil_loc.dest.operands) == 2
+                ):
+                    addr_var, offset = mlil_loc.operands[0].vars_read
+
+        if var_offset:
+            tainted_offset_var = [
+                var.variable for var in already_iterated if var.variable == var_offset
+            ]
+
+    return LoadStoreData(
+        offset,
+        addr_var,
+        tainted_offset_var,
+        var_to_trace.confidence_level if var_to_trace else TaintConfidence.Tainted,
+        mlil_loc.address,
+    )
+
+
+def create_tainted_var_offset_from_load_store(
+    mlil_loc,
+    already_iterated: Union[list, set],
+    var_to_trace=None,
+) -> TaintedVarOffset:
+    """
+    Extracts relevant data from an MLIL load/store instruction and creates a TaintedVarOffset object.
+
+    Args:
+        mlil_loc: The MediumLevelILInstruction representing a load or store operation.
+        already_iterated (Union[list, set]): A collection of variables that have already been identified as tainted
+                                              or iterated through in the taint analysis.
+        var_to_trace: An optional variable to specifically trace within the load/store operation.
+
+    Returns:
+        TaintedVarOffset: An object representing the tainted variable offset found in the load/store.
+    """
+    ls_data = None
+
+    if var_to_trace:
+        ls_data: LoadStoreData = find_load_store_data(
+            mlil_loc, already_iterated, var_to_trace
+        )
+    else:
+        ls_data: LoadStoreData = find_load_store_data(mlil_loc, already_iterated)
+
+    return TaintedVarOffset(
+        ls_data.addr_var,
+        ls_data.offset,
+        ls_data.offset_var,
+        ls_data.confidence_level,
+        ls_data.loc_address,
+    )
+
+
+def create_tainted_global(
+    analysis,
+    global_var: MediumLevelILConstPtr,
+    confidence_level: TaintConfidence,
+    mlil_loc: MediumLevelILInstruction,
+) -> Union[None, TaintedGlobal]:
+    """
+    Creates a TaintedGlobal object if the given MLIL constant pointer resolves to a global symbol.
+
+    Args:
+        analysis: An analysis object containing the BinaryView (e.g., `analysis.bv`).
+        global_var (MediumLevelILConstPtr): The MLIL constant pointer that might refer to a global variable.
+        confidence_level (TaintConfidence): The confidence level of the taint.
+        mlil_loc (MediumLevelILInstruction): The MLIL instruction where the global variable is accessed.
+
+    Returns:
+        Union[None, TaintedGlobal]: A TaintedGlobal object if a symbol is found, otherwise None.
+    """
+    glob_symbol = get_symbol_from_const_ptr(analysis.bv, global_var)
+    if glob_symbol:
+        return TaintedGlobal(
+            glob_symbol.name,
+            confidence_level,
+            mlil_loc.address,
+            global_var,
+            glob_symbol,
+        )
+
+    return None
+
+
+def create_tainted_var(tainted_var, confidence_level, mlil_loc):
+    """
+    Creates a TaintedVar object representing a tainted variable.
+
+    Args:
+        tainted_var: The variable object (can be a Variable or SSAVariable-like object).
+                     If it has a 'var' attribute (e.g., SSAVariable), that's used; otherwise,
+                     the object itself is used.
+        confidence_level (TaintConfidence): The confidence level of the taint.
+        mlil_loc (MediumLevelILInstruction): The MLIL instruction associated with this tainted variable.
+
+    Returns:
+        TaintedVar: An instance of the TaintedVar class.
+    """
+    return TaintedVar(
+        tainted_var.var if hasattr(tainted_var, "var") else tainted_var,
+        confidence_level,
+        mlil_loc.address,
+    )
+
+
+def handle_tainted_var(
+    tainted_var: Union[Variable, SSAVariable, MediumLevelILVar, MediumLevelILVarSsa],
+    vars_found: Union[list, set],
+    mlil_loc: MediumLevelILInstruction,
+    var_to_trace=None,
+):
+    var_object = tainted_var.var if hasattr(tainted_var, "var") else tainted_var
+    if var_object != var_to_trace.variable:
+        if isinstance(vars_found, list):
+            vars_found.append(
+                create_tainted_var(tainted_var, var_to_trace.confidence_level, mlil_loc)
+            )
+
+        elif isinstance(vars_found, set):
+            vars_found.add(
+                create_tainted_var(tainted_var, var_to_trace.confidence_level, mlil_loc)
+            )
+
+
+def append_bingoggles_var_by_type(
+    tainted_var: Union[Variable, MediumLevelILVar, MediumLevelILConstPtr],
     var_to_trace: Union[
         TaintedStructMember, TaintedVar, TaintedGlobal, TaintedVarOffset
     ],
-    vars_found: list,
+    vars_found: Union[list, set],
     mlil_loc: MediumLevelILInstruction,
     analysis,
 ) -> None:
     """
-    Appends the correct taint wrapper (TaintedVar or TaintedGlobal) to the variable worklist.
-
-    Determines whether the input MLIL variable is a constant pointer (i.e. global) or
-    a local variable, and appends the corresponding BinGoggles taint object to `vars_found`.
-
-    Args:
-        tainted_var: The MLIL variable or constant pointer found in the instruction.
-        var_to_trace: The original tainted variable being traced.
-        vars_found: The worklist of tainted variables to be analyzed.
-        mlil_loc: The MLIL instruction address where the variable was found.
-        analysis: The main analysis object providing symbol, taint utilities and binary view.
-
     :TODO support for other bingoggles var types
     """
+    if not isinstance(vars_found, list) or not isinstance(vars_found, set):
+        raise TypeError(
+            f"Expected 'vars_found' to be a list or a set, but got {type(vars_found)}"
+        )
 
-    if isinstance(tainted_var, MediumLevelILVar) or isinstance(tainted_var, Variable):
-        var_object = tainted_var.var if hasattr(tainted_var, "var") else tainted_var
-        if var_object != var_to_trace.variable:
-            vars_found.append(
-                TaintedVar(
-                    tainted_var.var if hasattr(tainted_var, "var") else tainted_var,
-                    TaintConfidence.Tainted,
-                    mlil_loc.address,
-                )
+    if isinstance(
+        tainted_var, (MediumLevelILVar, Variable, SSAVariable, MediumLevelILVarSsa)
+    ):
+        if var_to_trace:
+            handle_tainted_var(tainted_var, vars_found, mlil_loc, var_to_trace)
+        else:
+            handle_tainted_var(tainted_var, vars_found, mlil_loc)
+    elif isinstance(tainted_var, MediumLevelILConstPtr):
+        if var_to_trace:
+            tainted_global = create_tainted_global(
+                analysis, tainted_var, var_to_trace.confidence_level, mlil_loc
+            )
+        else:
+            tainted_global = create_tainted_global(
+                analysis, tainted_var, TaintConfidence.Tainted, mlil_loc
             )
 
-    else:
-        glob_symbol = get_symbol_from_const_ptr(analysis.bv, tainted_var)
-        if glob_symbol:
+        if isinstance(vars_found, list):
+            vars_found.append(tainted_global)
+
+        elif isinstance(vars_found, set):
+            vars_found.add(tainted_global)
+
+    elif mlil_loc.operation.value in [
+        MediumLevelILOperation.MLIL_LOAD_SSA.value,
+        MediumLevelILOperation.MLIL_LOAD.value,
+        MediumLevelILOperation.MLIL_STORE.value,
+        MediumLevelILOperation.MLIL_STORE_SSA.value,
+    ]:
+        if isinstance(vars_found, list):
             vars_found.append(
-                TaintedGlobal(
-                    glob_symbol.name,
-                    var_to_trace.confidence_level,
-                    mlil_loc.address,
-                    tainted_var,
-                    glob_symbol,
+                create_tainted_var_offset_from_load_store(
+                    mlil_loc, vars_found, var_to_trace
                 )
             )
+        elif isinstance(vars_found, set):
+            vars_found.add(
+                create_tainted_var_offset_from_load_store(mlil_loc, vars_found)
+            )
+
+    elif mlil_loc.operation.value in [
+        MediumLevelILOperation.MLIL_STORE_STRUCT_SSA,
+        MediumLevelILOperation.MLIL_STORE_STRUCT,
+    ]:
+        ...
 
 
 def propagate_mlil_store_struct(
@@ -998,7 +1183,6 @@ def propagate_mlil_store(
                     if var.variable == var_offset
                 ]
 
-        # :TODO fix output results
         if offset_var_taintedvar:
             vars_found.append(
                 TaintedVarOffset(
@@ -1142,13 +1326,13 @@ def analyze_function_model(
                         tainted_variables_to_add.add(mlil_loc.params[t_dst_indx])
 
         for t_var in tainted_variables_to_add:
-            append_tainted_var_by_type(
+            append_bingoggles_var_by_type(
                 t_var, var_to_trace, vars_found, mlil_loc, analysis
             )
 
         if func_analyzed.taints_return:
             for t_var in mlil_loc.vars_written:
-                append_tainted_var_by_type(
+                append_bingoggles_var_by_type(
                     t_var, var_to_trace, vars_found, mlil_loc, analysis
                 )
 
@@ -1156,7 +1340,7 @@ def analyze_function_model(
     else:
         for t_src_indx in func_analyzed.taint_sources:
             for t_dst_indx in func_analyzed.taint_destinations:
-                append_tainted_var_by_type(
+                append_bingoggles_var_by_type(
                     mlil_loc.params[t_dst_indx],
                     var_to_trace,
                     vars_found,
@@ -1166,7 +1350,7 @@ def analyze_function_model(
 
         if func_analyzed.taints_return:
             for t_var in mlil_loc.vars_written:
-                append_tainted_var_by_type(
+                append_bingoggles_var_by_type(
                     t_var, var_to_trace, vars_found, mlil_loc, analysis
                 )
 
@@ -1216,7 +1400,7 @@ def analyze_new_imported_function(
         if interproc_results.is_return_tainted and mlil_loc.vars_written:
             if mlil_loc.vars_written:
                 var_assigned = mlil_loc.vars_written[0]
-                append_tainted_var_by_type(
+                append_bingoggles_var_by_type(
                     var_assigned, var_to_trace, vars_found, mlil_loc, analysis
                 )
 
@@ -1229,7 +1413,7 @@ def analyze_new_imported_function(
             )
 
             for _, var in zipped_results:
-                append_tainted_var_by_type(
+                append_bingoggles_var_by_type(
                     var, var_to_trace, vars_found, mlil_loc, analysis
                 )
 
@@ -1324,8 +1508,6 @@ def propagate_mlil_call(
                             binary_view=analysis.bv,
                         )
 
-
-
             if func_analyzed and isinstance(func_analyzed, FunctionModel):
                 # If it's a known modeled function, use the model logic
                 analyze_function_model(
@@ -1348,16 +1530,21 @@ def propagate_mlil_call(
 
                 for _, var in zipped_results:
                     # Wrap each tainted parameter into the appropriate BinGoggles taint type
-                    append_tainted_var_by_type(
+                    append_bingoggles_var_by_type(
                         var, var_to_trace, vars_found, mlil_loc, analysis
                     )
 
                 if func_analyzed.is_return_tainted:
                     if mlil_loc.vars_written:
                         # If return value is tainted, treat it as a new tainted variable
-                        append_tainted_var_by_type(
-                            mlil_loc.vars_written[0], var_to_trace, vars_found, mlil_loc, analysis
+                        append_bingoggles_var_by_type(
+                            mlil_loc.vars_written[0],
+                            var_to_trace,
+                            vars_found,
+                            mlil_loc,
+                            analysis,
                         )
+
 
 def add_read_var(
     mlil_loc: MediumLevelILInstruction,
@@ -1477,7 +1664,7 @@ def propagate_mlil_set_var(
                 )
 
             if variable_written_to:
-                append_tainted_var_by_type(
+                append_bingoggles_var_by_type(
                     variable_written_to,
                     var_to_trace,
                     vars_found,
@@ -1486,13 +1673,13 @@ def propagate_mlil_set_var(
                 )
 
         elif variable_written_to:
-            append_tainted_var_by_type(
+            append_bingoggles_var_by_type(
                 variable_written_to, var_to_trace, vars_found, mlil_loc, analysis
             )
 
         if variable_read_from:
             if add_read_var(mlil_loc):
-                append_tainted_var_by_type(
+                append_bingoggles_var_by_type(
                     variable_read_from,
                     var_to_trace,
                     vars_found,
@@ -1544,7 +1731,7 @@ def propagate_mlil_set_var_field(
         )
 
     if decision in [TraceDecision.PROCESS_AND_TRACE, TraceDecision.SKIP_AND_PROCESS]:
-        append_tainted_var_by_type(
+        append_bingoggles_var_by_type(
             mlil_loc.dest, var_to_trace, vars_found, mlil_loc, analysis
         )
 
@@ -1595,7 +1782,7 @@ def propagate_mlil_unhandled_operation(
     if decision in [TraceDecision.PROCESS_AND_TRACE, TraceDecision.SKIP_AND_PROCESS]:
         if mlil_loc.vars_written and is_rw_operation(mlil_loc):
             for variable_written_to in mlil_loc.vars_written:
-                append_tainted_var_by_type(
+                append_bingoggles_var_by_type(
                     variable_written_to, var_to_trace, vars_found, mlil_loc, analysis
                 )
 

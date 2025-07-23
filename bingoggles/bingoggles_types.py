@@ -34,6 +34,111 @@ class TaintConfidence:
 
 
 @dataclass
+class CallData:
+    """
+    Represents data associated with a function call during taint analysis.
+
+    Attributes:
+        call_params (list): The raw parameters of the function call as seen in the MLIL.
+        call_object (Function): The Binary Ninja Function object representing the called function.
+        function_call_params (List[SSAVariable]): The SSA variables representing the parameters
+                                                  of the *called function* (callee's perspective).
+        zipped_params (List[SSAVariable]): A list of SSA variables representing the parameters
+                                           of the call, often zipped with the function's expected parameters.
+        tainted_sub_params (List[SSAVariable]): A list of SSA variables within the called function
+                                                that are identified as tainted due to the call.
+    """
+
+    def __init__(
+        self,
+        call_params: list,
+        call_object: Function,
+        function_call_params: List[SSAVariable],
+        zipped_params: List[SSAVariable],
+        tainted_sub_params: List[SSAVariable],
+    ):
+        self.call_params = call_params
+        self.call_object = call_object
+        self.function_call_params = function_call_params
+        self.zipped_params = zipped_params
+        self.tainted_sub_params = tainted_sub_params
+
+    def __repr__(self) -> str:
+        return (
+            f"CallData(call_params={self.call_params!r}, call_object={self.call_object!r}, "
+            f"function_call_params={self.function_call_params!r}, "
+            f"zipped_params={self.zipped_params!r}, "
+            f"tainted_sub_params={self.tainted_sub_params!r})"
+        )
+
+
+@dataclass
+class LoadStoreData:
+    """
+    Represents data extracted from a load or store operation.
+
+    This class encapsulates information about memory access, including the base address
+    variable, the offset, and details about any tainted offset variables,
+    along with confidence and location.
+
+    Attributes:
+        offset: The offset applied to the base address variable. Can be an integer or other type.
+        addr_var (Union[Variable, SSAVariable]): The base address variable involved in the load/store.
+        tainted_offset_var (Union["TaintedVar", "TaintedGlobal", "TaintedStructMember", "TaintedVarOffset"]):
+            Information about a tainted variable contributing to the offset, if applicable.
+        confidence_level (TaintConfidence): The confidence level of the taint.
+        loc_address (int): The address of the MLIL instruction.
+    """
+
+    def __init__(
+        self,
+        offset,
+        addr_var: Union[Variable, SSAVariable],
+        tainted_offset_var: Union[
+            "TaintedVar", "TaintedGlobal", "TaintedStructMember", "TaintedVarOffset"
+        ],
+        confidence_level: TaintConfidence,
+        loc_address: int,
+    ):
+        self.offset = offset
+        self.addr_var = addr_var
+        self.offset_var_taintedvar = tainted_offset_var
+        self.confidence_level = confidence_level
+        self.loc_address = loc_address
+
+    def __repr__(self):
+        display_offset = (
+            hex(self.offset) if isinstance(self.offset, int) else self.offset
+        )
+        return (
+            f"[{Fore.GREEN}LoadStoreData{Fore.RESET}]: {self.addr_var}:{display_offset}"
+        )
+
+    def __eq__(self, other):
+        if not isinstance(other, LoadStoreData):
+            return NotImplemented
+
+        return (
+            self.offset == other.offset
+            and self.addr_var == other.addr_var
+            and self.offset_var_taintedvar == other.offset_var_taintedvar
+            and self.confidence_level == other.confidence_level
+            and self.loc_address == other.loc_address
+        )
+
+    def __hash__(self):
+        return hash(
+            (
+                self.offset,
+                self.addr_var,
+                self.offset_var_taintedvar,
+                self.confidence_level,
+                self.loc_address,
+            )
+        )
+
+
+@dataclass
 class TaintedGlobal:
     """
     Represents a tainted global variable within the analysis.

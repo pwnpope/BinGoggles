@@ -22,6 +22,333 @@ from .function_registry import get_modeled_function_index, modeled_functions
 from tqdm import tqdm
 
 
+class InterprocHelper:
+    def __init__(
+        self,
+        binary_view: BinaryView,
+        original_tainted_param: Union[str, list],
+        origin_function: Function,
+        tainted_param_map: set,
+    ) -> None:
+        self.binary_view = binary_view
+        self.recursion_limit = 8
+        self.sub_functions_analyzed = 0
+        self.origin_function = []
+        self.original_tainted_param = original_tainted_param
+        self.tainted_param_map
+
+    def handle_mlil_store_ssa(loc, tainted_variables: set):
+        tainted_variables.add(
+            create_tainted_var_offset_from_load_store(loc, tainted_variables)
+        )
+
+    def gather_mlil_call_data(loc, binary_view: BinaryView, tainted_variables: set):
+        # Extract the parameters involved in the call
+        call_params = [
+            param for param in loc.params if isinstance(param, MediumLevelILVarSsa)
+        ]
+
+        call_object = addr_to_func(
+            binary_view,
+            loc.dest.value.value,
+        )
+
+        function_call_params = call_object.parameter_vars
+        zipped_params = list(zip(call_params, function_call_params))
+
+        # Identify sub-function parameters that are tainted by comparing the underlying variable
+        tainted_sub_params = [
+            param[1].name
+            for param in zipped_params
+            if any(tv.variable == param[0].ssa_form.var for tv in tainted_variables)
+        ]
+
+        return CallData(
+            call_params,
+            call_object,
+            function_call_params,
+            zipped_params,
+            tainted_sub_params,
+        )
+
+    def gather_interproc_data(
+        self, mlil_loc, function_node, analysis, call_data: CallData
+    ) -> Union[InterprocTaintResult, FunctionModel]:
+        imported_function = analysis.resolve_function_type(mlil_loc)
+        interproc_results = None
+        normalized_function_name = get_modeled_function_name_at_callsite(
+            function_node, mlil_loc
+        )
+        _, tainted_func_param = get_func_param_from_call_param(
+            analysis.bv, mlil_loc, self.original_tainted_param
+        )
+
+        if normalized_function_name:
+            interproc_results = analysis.analyze_function_taint(
+                normalized_function_name, tainted_func_param
+            )
+            self.sub_functions_analyzed += 1
+
+        elif imported_function:
+            interproc_results = analysis.analyze_function_taint(
+                imported_function, self.original_tainted_param
+            )
+            self.sub_functions_analyzed += 1
+
+        elif not normalized_function_name and not imported_function:
+            resolved_function_object = resolve_got_callsite(
+                function_node.view, mlil_loc.dest.value.value
+            )
+
+            if resolved_function_object:
+                interproc_results = analysis.analyze_function_taint(
+                    resolved_function_object.name, self.original_tainted_param
+                )
+
+            else:
+                if self.recursion_limit < self.sub_functions_analyzed:
+                    interproc_results = analysis.trace_function_taint(
+                        function_node=call_data.call_object,
+                        tainted_params=call_data.tainted_sub_params,
+                        binary_view=self.binary_view,
+                        origin_function=self.origin_function,
+                        original_tainted_param=self.original_tainted_param,
+                        tainted_param_map=call_data.tainted_param_map,
+                    )
+
+                    self.sub_functions_analyzed += 1
+
+        return interproc_results
+
+    def handle_mlil_call_ssa(
+        self,
+        function_node: Function,
+        analysis,
+        tainted_variables: set,
+        verbose: bool,
+        loc,
+    ):
+        call_data = self.gather_mlil_call_data(self.binary_view, tainted_variables)
+
+        if not call_data.call_object:
+            return
+
+        if verbose:
+            print(
+                f"[{Fore.GREEN}INFO{Fore.RESET}] Analyzing sub-function call: {call_data.call_object} for tainted parameters"
+            )
+
+        interproc_results = self.gather_interproc_data(
+            loc, function_node, analysis, call_data
+        )
+
+        # Map back the tainted sub-function parameters to the current function's variables
+        tainted_sub_variables = [
+            param[0].ssa_form.var
+            for param in call_data.zipped_params
+            if param[1].name in interproc_results.tainted_param_names
+        ]
+
+        for sub_var in tainted_sub_variables:
+            append_bingoggles_var_by_type(sub_var, tainted_variables, loc, analysis)
+
+        if interproc_results.is_return_tainted:
+            if loc.vars_written:
+                var = loc.vars_written[0]
+                append_bingoggles_var_by_type(var, tainted_variables, loc, analysis)
+
+    def mlil_handler(
+        self, analysis, loc, tainted_variables: set, function_node: Function, verbose
+    ) -> None:
+        match loc.operation.value:
+            case MediumLevelILOperation.MLIL_STORE_SSA.value:
+                self.handle_mlil_store_ssa(loc, tainted_variables, function_node)
+
+            case MediumLevelILOperation.MLIL_LOAD_SSA.value:
+                #:TODO add support
+                ...
+
+            case MediumLevelILOperation.MLIL_SET_VAR_SSA.value:
+                var = loc.vars_written[0]
+                append_bingoggles_var_by_type(var, tainted_variables, loc, analysis)
+
+            case MediumLevelILOperation.MLIL_CALL_SSA.value:
+                self.handle_mlil_call_ssa(analysis, tainted_variables, verbose)
+
+            case MediumLevelILOperation.MLIL_SET_VAR_SSA_FIELD.value:
+                tainted_variables.add(
+                    TaintedVar(loc.dest, TaintConfidence.Tainted, loc.address)
+                )
+
+            case _:
+                if loc.operation in [
+                    MediumLevelILOperation.MLIL_RET.value,
+                    MediumLevelILOperation.MLIL_GOTO.value,
+                    MediumLevelILOperation.MLIL_IF.value,
+                    MediumLevelILOperation.MLIL_NORET.value,
+                    MediumLevelILOperation.MLIL_SYSCALL_SSA.value,
+                ]:
+                    return
+
+    def trace_through_node(
+        self, analysis, function_node: Function, tainted_variables: set
+    ) -> None:
+        all_mlil_locs = (
+            mlil_loc for block in function_node.medium_level_il for mlil_loc in block
+        )
+        for mlil_loc in all_mlil_locs:
+            loc = mlil_loc.ssa_form
+            self.mlil_handler(analysis, loc, tainted_variables, function_node)
+
+    def print_banner(
+        verbose: bool,
+        trace_function_taint_printed: bool,
+        tainted_params: Tuple[Union[Variable, str, Tuple[Variable]]],
+        function_node: Function,
+    ) -> None:
+        if verbose and not trace_function_taint_printed:
+            print(
+                f"tainted_params: Variable | str | list[Variable]{Fore.RESET})\n-> {Fore.LIGHTBLUE_EX}{function_node}"
+                f"{Fore.RESET}:{Fore.BLUE}{tainted_params}{Fore.RESET}\n{Fore.GREEN}{'='*113}{Fore.RESET}"
+            )
+            trace_function_taint_printed = True
+
+    def trace_init(
+        self,
+        function_node: Union[int, Function],
+        tainted_params: Tuple[Union[Variable, str, Tuple[Variable]]],
+        original_tainted_params: Tuple[Union[Variable, str, Tuple[Variable]]],
+        bv: BinaryView,
+        tainted_param_map: dict = None,
+    ) -> None:
+        """
+        Initializes parameters for a taint trace.
+
+        Args:
+            function_node: The current function being analyzed.
+            tainted_params: Current parameters considered tainted.
+            original_tainted_params: Initial set of tainted parameters for the trace.
+            bv: The BinaryView object for analysis.
+            tainted_param_map: Optional dictionary for tracking tainted parameters.
+        """
+        if origin_function is None:
+            origin_function = function_node
+
+        if original_tainted_params is None:
+            original_tainted_params = tainted_params
+
+        if tainted_param_map is None:
+            tainted_param_map = {}
+
+        if binary_view is None:
+            binary_view = bv
+
+        if not isinstance(tainted_params, list):
+            tainted_params = [self.get_ssa_variable(function_node, tainted_params)]
+
+    def walk_variable(self, var_mapping: dict, key_names: set):
+        """
+        Recursively traverse the variable mapping to find all variables influenced by the tainted variables.
+
+        Args:
+            var_mapping (dict): A dictionary mapping variables to the set of variables they influence.
+            key_names (set): A set of variable names to start the traversal from.
+
+        Returns:
+            set: A set of all variable names influenced by the initial key_names.
+        """
+        if not any(var in var_mapping for var in key_names):
+            return set(key_names)
+
+        new_variables = set()
+
+        for var_name in key_names:
+            if var_name in var_mapping:
+                # print("adding var to new variables: ", var_name)
+                new_variables.update(var_mapping[var_name])
+
+            else:
+                new_variables.add(var_name)
+
+        return self.walk_variable(var_mapping, new_variables)
+
+    def convert_str_params_to_var(
+        tainted_params: Tuple[Union[Variable, str, Tuple[Variable]]],
+        function_node: Function,
+        tainted_variables: set,
+        analysis: "Analysis",
+    ):
+        for param in tainted_params:
+            if isinstance(param, str):
+                try:
+                    var_obj = str_param_to_var_object(
+                        function_node, param, ssa_form=True
+                    )
+                    tainted_variables.add(
+                        TaintedVar(
+                            var_obj,
+                            TaintConfidence.Tainted,
+                            analysis.find_first_var_use(function_node, var_obj),
+                        )
+                    )
+
+                except ValueError:
+                    continue
+
+            elif isinstance(param, Variable):
+                tainted_variables.add(
+                    TaintedVar(
+                        param,
+                        TaintConfidence.Tainted,
+                        analysis.find_first_var_use(function_node, var_obj),
+                    )
+                )
+
+    def get_ssa_variable(func, var: Variable) -> SSAVariable:
+        """
+        Retrieves the SSA form of a given variable within a function.
+
+        Args:
+            func: The function object (e.g., Binary Ninja Function).
+            var (Variable): The variable to convert to SSA form.
+
+        Returns:
+            SSAVariable: The SSA form of the variable, or None if not found.
+        """
+        if isinstance(var, SSAVariable):
+            return var
+
+        for ssa_var in func.mlil.ssa_form.vars:
+            if ssa_var.var == var:
+                return ssa_var
+
+    def convert_function_node_to_function_object(bv, function_node) -> Function:
+        """
+        Converts a function address (int) to a Function object.
+
+        Args:
+            bv: The BinaryView object.
+            function_node (int | Function): The function's address as an integer or an existing Function object.
+
+        Returns:
+            Function: The corresponding Function object.
+
+        Raises:
+            ValueError: If the function cannot be found from the provided address.
+        """
+        if isinstance(function_node, int):
+            addr = function_node
+            function_node = addr_to_func(bv, function_node)
+            if function_node is None:
+                raise ValueError(
+                    f"[{Fore.RED}ERROR{Fore.RESET}]Could not find target function from address @ {addr:#0x}"
+                )
+
+            return function_node
+
+        return function_node
+
+
 class VargFunctionCallResolver:
     """
     A class to resolve and patch variadic function calls in a Binary Ninja BinaryView.
@@ -30,6 +357,7 @@ class VargFunctionCallResolver:
         binary_view (BinaryView): The Binary Ninja BinaryView object representing the binary.
         verbose (bool): If True, enables verbose output during resolution and patching.
     """
+
     def __init__(self, binary_view: BinaryView, verbose: bool = True):
         self.bv = binary_view
         self.verbose = verbose
@@ -52,15 +380,24 @@ class VargFunctionCallResolver:
             if self.bv.file.original_filename[-5:] == ".bndb":
                 output_bndb_path = self.bv.file.original_filename
             else:
-                output_bndb_path = self.bv.file.original_filename + ".bndb" if not self.bv.file.original_filename.endswith(".bndb") else self.bv.file.original_filename
-        
+                output_bndb_path = (
+                    self.bv.file.original_filename + ".bndb"
+                    if not self.bv.file.original_filename.endswith(".bndb")
+                    else self.bv.file.original_filename
+                )
+
         success = self.bv.file.create_database(output_bndb_path, None, None)
         if success:
             print(f"Successfully saved BinaryView to {output_bndb_path}")
         else:
             print(f"Failed to save BinaryView to {output_bndb_path}")
 
-    def resolve_and_patch(self, resolved: List[FunctionModel], function_object: Function, mlil_loc: MediumLevelILInstruction) -> Union[FunctionModel, None]:
+    def resolve_and_patch(
+        self,
+        resolved: List[FunctionModel],
+        function_object: Function,
+        mlil_loc: MediumLevelILInstruction,
+    ) -> Union[FunctionModel, None]:
         """
         Resolve and patch a modeled variadic function call if it matches a known model.
 
@@ -106,7 +443,9 @@ class VargFunctionCallResolver:
 
         return text_section_start <= function_start_address < text_section_end
 
-    def resolve_varg_func_calls(self, functions_to_resolve: list = [], output_path: str = None) -> None:
+    def resolve_varg_func_calls(
+        self, functions_to_resolve: list = [], output_path: str = None
+    ) -> None:
         """
         Resolves variadic function calls within specified functions or all functions in the binary view.
 
@@ -131,7 +470,7 @@ class VargFunctionCallResolver:
             iterator = functions_to_iterate
 
         for function_object in iterator:
-            if self.is_in_text_section(function_object): 
+            if self.is_in_text_section(function_object):
                 for block in function_object.medium_level_il:
                     for mlil_loc in block:
                         if isinstance(mlil_loc, MediumLevelILCall):
@@ -141,6 +480,7 @@ class VargFunctionCallResolver:
             self.save_patches_made_to_bndb(output_path)
         else:
             self.save_patches_made_to_bndb()
+
 
 class Analysis:
     def __init__(
@@ -618,7 +958,7 @@ class Analysis:
             var_type (SlicingID): The type of the target (FunctionVar, GlobalVar, StructMember, FunctionParam).
             output (OutputMode, optional): Whether to print or return the slice results. Default is Returned.
             slice_type (SliceType, optional): Slicing direction (Forward or Backward). Default is Forward.
-            
+
         Returns:
             tuple[list, str, list]:
                 - List of TaintedLOC objects (instructions visited during the slice)
@@ -679,7 +1019,7 @@ class Analysis:
             self.render_sliced_output(
                 sliced_func, OutputMode.Printed, func_obj, propagated_vars
             )
-        
+
         elif output == OutputMode.Returned:
             tainted_locs, func_name, tainted_vars = self.render_sliced_output(
                 sliced_func, OutputMode.Returned, func_obj, propagated_vars
@@ -921,7 +1261,7 @@ class Analysis:
     @cache
     def trace_function_taint(
         self,
-        function_node: int | Function,
+        function_node: Union[int, Function],
         tainted_params: Tuple[Union[Variable, str, Tuple[Variable]]],
         binary_view: BinaryView = None,
         origin_function: Function = None,
@@ -930,349 +1270,56 @@ class Analysis:
         recursion_limit=8,
         sub_functions_analyzed=0,
     ) -> InterprocTaintResult:
-        """
-        Perform interprocedural taint analysis to determine whether any parameters or the return value
-        of a function are tainted, directly or indirectly.
 
-        Args:
-            function_node (int | Function): Target function for analysis, provided as either a function start address or a Binary Ninja `Function` object.
-            tainted_params (Variable | str | list[Variable]): One or more parameters to treat as initially tainted. Accepts a single `Variable`, parameter name (`str`), or a list of `Variable` objects.
-            binary_view (BinaryView, optional): The BinaryView context for address resolution. Defaults to `self.bv` if not explicitly provided.
-            origin_function (Function, optional): Used internally to track the original entry point of the analysis.
-            original_tainted_params (Variable | str | list[Variable], optional): Original tainted inputs (preserved for reporting).
-            tainted_param_map (dict, optional): Maps each tainted parameter to others it influences.
-            recursion_limit (int, optional): Maximum depth for recursive analysis into sub-functions. Defaults to 8.
-            sub_functions_analyzed (int, optional): Tracks how deep the current recursive call chain has gone.
+        # Init phase
+        i_h = InterprocHelper()
+        function_node = i_h.convert_function_node_to_function_object(
+            binary_view, function_node
+        )
+        i_h.trace_init(
+            function_node,
+            tainted_params,
+            original_tainted_params,
+            binary_view,
+            tainted_param_map,
+        )
 
-        Returns:
-            InterprocTaintResult: A result object containing:
-                - `tainted_param_names` (set[str]): Names of parameters found to be tainted.
-                - `original_tainted_variables` (list[TaintedVar]): The original tainted input(s).
-                - `is_return_tainted` (bool): True if the function's return value is tainted.
-                - `tainted_param_map` (dict): A mapping of input parameters to any other parameters they taint.
-        """
-        if tainted_param_map is None:
-            tainted_param_map = {}
-
-        if binary_view is None:
-            binary_view = self.bv
-
-        def walk_variable(var_mapping: dict, key_names: set):
-            """
-            Recursively traverse the variable mapping to find all variables influenced by the tainted variables.
-
-            Args:
-                var_mapping (dict): A dictionary mapping variables to the set of variables they influence.
-                key_names (set): A set of variable names to start the traversal from.
-
-            Returns:
-                set: A set of all variable names influenced by the initial key_names.
-            """
-            if not any(var in var_mapping for var in key_names):
-                return set(key_names)
-
-            new_variables = set()
-
-            for var_name in key_names:
-                if var_name in var_mapping:
-                    # print("adding var to new variables: ", var_name)
-                    new_variables.update(var_mapping[var_name])
-
-                else:
-                    new_variables.add(var_name)
-
-            return walk_variable(var_mapping, new_variables)
-
-        # Convert function_node to a Function object if it's provided as an integer address
-        if isinstance(function_node, int):
-            addr = function_node
-            function_node = addr_to_func(binary_view, function_node)
-            if function_node is None:
-                raise ValueError(
-                    f"[{Fore.RED}ERROR{Fore.RESET}]Could not find target function from address @ {addr:#0x}"
-                )
-
-        if origin_function is None:
-            origin_function = function_node
-
-        if original_tainted_params is None:
-            original_tainted_params = tainted_params
-
-        # Initialize a set for TaintedVar objects
         tainted_variables = set()
-
-        def get_ssa_variable(func, var: Variable):
-            if isinstance(var, SSAVariable):
-                return var
-
-            for ssa_var in func.mlil.ssa_form.vars:
-                if ssa_var.var == var:
-                    return ssa_var
-
-        # Ensure tainted_params is a list for consistent processing
-        if not isinstance(tainted_params, list):
-            tainted_params = [get_ssa_variable(function_node, tainted_params)]
-
-        if self.verbose and not self.trace_function_taint_printed:
-            print(
-                f"tainted_params: Variable | str | list[Variable]{Fore.RESET})\n-> {Fore.LIGHTBLUE_EX}{function_node}"
-                f"{Fore.RESET}:{Fore.BLUE}{tainted_params}{Fore.RESET}\n{Fore.GREEN}{'='*113}{Fore.RESET}"
-            )
-            self.trace_function_taint_printed = True
-
-        # Convert string parameter names to Variable objects in SSA form and wrap them in TaintedVar
-        for param in tainted_params:
-            if isinstance(param, str):
-                try:
-                    var_obj = str_param_to_var_object(
-                        function_node, param, ssa_form=True
-                    )
-                    tainted_variables.add(
-                        TaintedVar(
-                            var_obj,
-                            TaintConfidence.Tainted,
-                            self.find_first_var_use(function_node, var_obj),
-                        )
-                    )
-
-                except ValueError:
-                    continue
-
-            elif isinstance(param, Variable):
-                tainted_variables.add(
-                    TaintedVar(
-                        param,
-                        TaintConfidence.Tainted,
-                        self.find_first_var_use(function_node, var_obj),
-                    )
-                )
-
         variable_mapping = {}
         tainted_parameters = set()
 
-        # Iterate through each MLIL block in the function
-        for mlil_block in function_node.mlil:
-            for instr in mlil_block:
-                loc = instr.ssa_form
+        # Convert string parameter names to Variable objects in SSA form and wrap them in TaintedVar
+        i_h.convert_str_params_to_var(
+            tainted_params, function_node, tainted_variables, self
+        )
 
-                match int(loc.operation):
-                    # Handle SSA store operation by wrapping the destination variable in TaintedVar
-                    case int(MediumLevelILOperation.MLIL_STORE_SSA):
-                        address_variable, offset_variable = None, None
-                        offset_var_taintedvar = None
-                        addr_var = None
-                        offset = None
+        i_h.print_banner(
+            self.verbose,
+            self.trace_function_taint_printed,
+            tainted_params,
+            function_node,
+        )
 
-                        if len(loc.dest.operands) == 1:
-                            addr_var = loc.dest.operands[0]
+        i_h.trace_through_node(self, function_node)
 
-                        elif len(loc.dest.operands) == 2:
-                            address_variable, offset_variable = loc.dest.operands
-                            if isinstance(offset_variable, MediumLevelILConst):
-                                addr_var, offset = loc.dest.operands
-                                offset_variable = None
+        # Map variables written to the variables read in the current instruction
+        for var_assignment in loc.vars_written:
+            variable_mapping[var_assignment] = loc.vars_read
 
-                            elif isinstance(offset_variable, MediumLevelILVarSsa):
-                                addr_var, offset_variable = loc.dest.operands
-                                offset_variable = offset_variable.var
-
-                            else:
-                                addr_var, offset = address_variable.operands
-
-                            if offset_variable:
-                                offset_var_taintedvar = [
-                                    var.variable
-                                    for var in tainted_variables
-                                    if var.variable == offset_variable
-                                ]
-
-                        if offset_var_taintedvar:
-                            tainted_variables.add(
-                                TaintedVarOffset(
-                                    variable=addr_var,
-                                    offset=offset,
-                                    offset_var=TaintedVar(
-                                        variable=offset_var_taintedvar[0],
-                                        confidence_level=TaintConfidence.NotTainted,
-                                        loc_address=loc.address,
-                                    ),
-                                    confidence_level=TaintConfidence.Tainted,
-                                    loc_address=loc.address,
-                                    targ_function=function_node,
-                                )
-                            )
-
-                        elif offset_variable:
-                            tainted_variables.add(
-                                TaintedVarOffset(
-                                    addr_var,
-                                    offset,
-                                    TaintedVar(
-                                        offset_variable,
-                                        TaintConfidence.NotTainted,
-                                        loc.address,
-                                    ),
-                                    TaintConfidence.Tainted,
-                                    loc.address,
-                                    function_node,
-                                )
-                            )
-
-                        else:
-                            tainted_variables.add(
-                                TaintedVarOffset(
-                                    (
-                                        addr_var
-                                        if isinstance(addr_var, Variable)
-                                        else addr_var
-                                    ),
-                                    offset,
-                                    None,
-                                    TaintConfidence.Tainted,
-                                    loc.address,
-                                    function_node,
-                                )
-                            )
-
-                    # Handle SSA load operation by wrapping the source variable in TaintedVar
-                    case int(MediumLevelILOperation.MLIL_SET_VAR_SSA):
-                        for var in loc.vars_written:
-                            tainted_variables.add(
-                                TaintedVar(
-                                    var,
-                                    TaintConfidence.Tainted,
-                                    loc.address,
-                                )
-                            )
-
-                    # Check if the instruction is a function call in SSA form
-                    case int(MediumLevelILOperation.MLIL_CALL_SSA):
-                        # Extract the parameters involved in the call
-                        call_params = [
-                            param
-                            for param in loc.params
-                            if isinstance(param, MediumLevelILVarSsa)
-                        ]
-
-                        call_object = addr_to_func(
-                            binary_view,
-                            instr.dest.value.value,
-                        )
-
-                        if self.verbose:
-                            print(
-                                f"[{Fore.GREEN}INFO{Fore.RESET}] Analyzing sub-function call: {call_object} for tainted parameters"
-                            )
-
-                        if not call_object:
-                            continue
-
-                        function_call_params = call_object.parameter_vars
-                        zipped_params = list(zip(call_params, function_call_params))
-
-                        # Identify sub-function parameters that are tainted by comparing the underlying variable
-                        tainted_sub_params = [
-                            param[1].name
-                            for param in zipped_params
-                            if any(
-                                tv.variable == param[0].ssa_form.var
-                                for tv in tainted_variables
-                            )
-                        ]
-
-                        if recursion_limit < sub_functions_analyzed:
-                            interproc_results = self.trace_function_taint(
-                                function_node=call_object,
-                                tainted_params=tainted_sub_params,
-                                binary_view=binary_view,
-                                origin_function=origin_function,
-                                original_tainted_params=original_tainted_params,
-                                tainted_param_map=tainted_param_map,
-                            )
-
-                            sub_functions_analyzed += 1
-
-                            # Map back the tainted sub-function parameters to the current function's variables
-                            tainted_sub_variables = [
-                                param[0].ssa_form.var
-                                for param in zipped_params
-                                if param[1].name
-                                in interproc_results.tainted_param_names
-                            ]
-
-                            for sub_var in tainted_sub_variables:
-                                tainted_variables.add(
-                                    TaintedVar(
-                                        sub_var,
-                                        TaintConfidence.Tainted,
-                                        loc.address,
-                                    )
-                                )
-
-                            for ret_var in loc.vars_written:
-                                if interproc_results.is_return_tainted:
-                                    tainted_variables.add(
-                                        TaintedVar(
-                                            ret_var,
-                                            TaintConfidence.Tainted,
-                                            loc.address,
-                                        )
-                                    )
-
-                    case int(MediumLevelILOperation.MLIL_SET_VAR_SSA_FIELD):
-                        tainted_variables.add(
-                            TaintedVar(loc.dest, TaintConfidence.Tainted, loc.address)
-                        )
-
-                    case _:
-                        if loc.operation in [
-                            int(MediumLevelILOperation.MLIL_RET),
-                            int(MediumLevelILOperation.MLIL_GOTO),
-                            int(MediumLevelILOperation.MLIL_IF),
-                            int(MediumLevelILOperation.MLIL_NORET),
-                            int(MediumLevelILOperation.MLIL_SYSCALL_SSA),
-                        ]:
-                            continue
-
-                # Map variables written to the variables read in the current instruction
-                for var_assignment in loc.vars_written:
-                    variable_mapping[var_assignment] = loc.vars_read
-
-                # If any read variable is tainted, mark the written variables as tainted
-                if any(
-                    any(tv.variable == read_var for tv in tainted_variables)
-                    for read_var in loc.vars_read
-                ):
-                    for written_var in loc.vars_written:
-                        try:
-                            tainted_variables.add(
-                                TaintedVar(
-                                    written_var,
-                                    TaintConfidence.Tainted,
-                                    loc.address,
-                                )
-                            )
-
-                        except AttributeError:
-                            glob_symbol = get_symbol_from_const_ptr(
-                                binary_view, written_var
-                            )
-                            if glob_symbol:
-                                tainted_variables.add(
-                                    TaintedGlobal(
-                                        glob_symbol.name,
-                                        TaintConfidence.Tainted,
-                                        loc.address,
-                                        written_var,
-                                        glob_symbol,
-                                    )
-                                )
+        # If any read variable is tainted, mark the written variables as tainted
+        if any(
+            any(tv.variable == read_var for tv in tainted_variables)
+            for read_var in loc.vars_read
+        ):
+            if loc.vars_written:
+                var = loc.vars_written[0]
+                append_bingoggles_var_by_type(var, tainted_variables, loc, self)
 
         # Extract underlying variables from TaintedVar before walking the mapping.
         underlying_tainted = {tv.variable for tv in tainted_variables}
 
         # Determine all parameters that are tainted by walking through the variable mapping.
-        for var in walk_variable(variable_mapping, underlying_tainted):
+        for var in self.walk_variable(variable_mapping, underlying_tainted):
             if isinstance(var, MediumLevelILVarSsa):
                 var = var.var
 
@@ -1292,7 +1339,7 @@ class Analysis:
         for t_var in tainted_variables:
             loc = origin_function.get_llil_at(t_var.loc_address)
             """
-                Checking variable use sites for each variable in the tainted variables set, 
+                Checking variable use sites for each variable in the tainted variables set,
                 if any of them are the return variable, the return variable is tainted.
             """
             if loc:
