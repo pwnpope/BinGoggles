@@ -19,7 +19,7 @@ A **complete slice** traces a tainted variable's full journey through function c
 - [x] **Bidirectional taint analysis** – Supports both forward and backward slicing
 - [x] **Embedded-friendly** – Well-suited for firmware and embedded target analysis
 - [x] **Headless compatible** – Supports both Hugsy’s and Binary Ninja’s headless modes
-- [X] **Automated Function Argument Detection & Assignment** - Heuristically identifies and applies variable argument conventions to function parameters during analysis, improving the completeness of analysis.
+- [X] **Variadic Function Call Resolution & Patching** – Automatically identifies, resolves, and patches function calls with variable-length arguments.
 
 ## Install
 #### A) Setup python virtual environment

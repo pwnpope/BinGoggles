@@ -142,23 +142,6 @@ class VargFunctionCallResolver:
         else:
             self.save_patches_made_to_bndb()
 
-    def resolve(self, varg_functions_to_resolve: list = []) -> None:
-        """
-        Resolve all variadic function calls in the current BinaryView.
-        
-        Args:
-            varg_functions_to_resolve (list, optional): An optional list of function objects to resolve.
-        """
-        if len(varg_functions_to_resolve) > 0:
-            self.resolve_varg_func_calls(varg_functions_to_resolve)
-        else:
-            self.resolve_varg_func_calls()
-
-        self.resolve_varg_func_calls(self.bv.functions)
-
-    
-
-
 class Analysis:
     def __init__(
         self,
@@ -172,7 +155,7 @@ class Analysis:
         The `Analysis` class serves as the central engine for BinGoggles. It provides both intra-procedural and inter-procedural
         variable taint propagation capabilities across variables, struct members, globals, and imported functions.
 
-        It supports full-function taint tracing, cross-function taint mapping (calls and returns), and custom modeling of
+        It supports full-function taint tracing, cross-function taint mapping (calls and returns), and modeling of
         common library calls. This enables use cases such as:
 
             - Detecting if a return value is influenced by a tainted parameter
