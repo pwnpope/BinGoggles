@@ -266,22 +266,22 @@ class Analysis:
         func_obj: Function,
     ):
         """
-            Initialize taint tracing for a function variable.
+        Initialize taint tracing for a function variable.
 
-            This function identifies and traces the propagation of a variable within a function
+        This function identifies and traces the propagation of a variable within a function
         using either forward or backward slicing. It resolves the variable reference using the
         function's context and analyzes its usage in MLIL instructions.
 
-            Args:
-                slice_type (SliceType): Direction of the slice (Forward or Backward).
-                target (TaintTarget): The target function variable to trace, including its name and location.
-                instr_mlil (MediumLevelILInstruction): The MLIL instruction at the target location.
-                func_obj (Function): The Binary Ninja function object containing the variable.
+        Args:
+            slice_type (SliceType): Direction of the slice (Forward or Backward).
+            target (TaintTarget): The target function variable to trace, including its name and location.
+            instr_mlil (MediumLevelILInstruction): The MLIL instruction at the target location.
+            func_obj (Function): The Binary Ninja function object containing the variable.
 
-            Returns:
-                tuple[list[TaintedLOC], list[TaintedVar]]:
-                    - A list of tainted code locations (TaintedLOC) where taint propagation was detected.
-                    - A list of all propagated variables (TaintedVar) found during the trace.
+        Returns:
+            tuple[list[TaintedLOC], list[TaintedVar]]:
+                - A list of tainted code locations (TaintedLOC) where taint propagation was detected.
+                - A list of all propagated variables (TaintedVar) found during the trace.
         """
         var_object = str_to_var_object(target.variable, func_obj)
 
