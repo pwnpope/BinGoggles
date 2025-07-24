@@ -703,6 +703,97 @@ def extract_var_use_sites(
     else:
         return function_object.get_mlil_var_refs(var_to_trace.variable)
 
+@cache
+def micro_propagated_slice(
+    var_to_trace: Union[
+        TaintedVar, TaintedGlobal, TaintedVarOffset, TaintedStructMember
+    ],
+    function_node: Function,
+    vars_found: list,
+    max_depth=8
+) -> TraceDecision:
+    """
+    Recursively determines if, when tracing backward from `var_to_trace`, any variables in its propagation chain
+    can influence instructions at addresses greater than the current variable's address (i.e., can propagate taint further).
+    This function helps avoid false positives in static path analysis by checking if any "parent" variables
+    (those that flow into `var_to_trace`) have use sites beyond the current variable's address, and are not already
+    present in `vars_found`. The recursion is bounded by `max_depth` to prevent infinite loops.
+
+    Args:
+        var_to_trace (Union[TaintedVar, TaintedGlobal, TaintedVarOffset, TaintedStructMember]):
+            The variable currently being analyzed for backward propagation.
+        function_node (Function): The Binary Ninja function context for the analysis.
+        vars_found (list): List of variables already visited in the current trace (to avoid cycles).
+        max_depth (int, optional): Maximum recursion depth for the search. Defaults to 5.
+
+    Returns:
+        TraceDecision: 
+            - PROCESS_AND_TRACE if further propagation is possible (i.e., a parent variable can influence later instructions).
+            - SKIP_AND_PROCESS otherwise.
+    """
+    if max_depth == 0:
+        return TraceDecision.SKIP_AND_PROCESS
+
+    refs = function_node.get_mlil_var_refs(var_to_trace.variable if hasattr(var_to_trace, "variable") else var_to_trace)
+    for ref in refs:
+        loc = function_node.get_llil_at(ref.address).mlil
+        if hasattr(loc, "vars_read") and loc.vars_read:
+            for parent_var in loc.vars_read:
+                if any(getattr(v, "variable", None) == parent_var for v in vars_found):
+                    continue
+
+                parent_refs = function_node.get_mlil_var_refs(parent_var)
+                for parent_ref in parent_refs:
+                    if parent_ref.address > getattr(var_to_trace, "addr", getattr(var_to_trace, "loc_address", 0)):
+                        return TraceDecision.PROCESS_AND_TRACE
+
+                if micro_propagated_slice(parent_var, function_node, vars_found + [var_to_trace], max_depth-1) == TraceDecision.PROCESS_AND_TRACE:
+                    return TraceDecision.PROCESS_AND_TRACE
+
+    return TraceDecision.SKIP_AND_PROCESS
+
+def is_forward_in_past(
+    trace_type: SliceType,
+    mlil_loc: MediumLevelILInstruction,
+    first_mlil_loc: MediumLevelILInstruction,
+):
+    """
+    Determines if a forward taint trace has encountered an instruction earlier than the starting instruction.
+
+    Args:
+        trace_type (SliceType): The direction of the trace (should be SliceType.Forward).
+        mlil_loc (MediumLevelILInstruction): The current MLIL instruction being analyzed.
+        first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction where the trace began.
+
+    Returns:
+        bool: True if tracing forward and the current instruction index is before the starting instruction, False otherwise.
+    """
+    return (
+        trace_type == SliceType.Forward
+        and mlil_loc.instr_index < first_mlil_loc.instr_index
+    )
+
+
+def is_backward_in_future(
+    trace_type: SliceType,
+    mlil_loc: MediumLevelILInstruction,
+    first_mlil_loc: MediumLevelILInstruction,
+):
+    """
+    Determines if a backward taint trace has encountered an instruction later than the starting instruction.
+
+    Args:
+        trace_type (SliceType): The direction of the trace (should be SliceType.Backward).
+        mlil_loc (MediumLevelILInstruction): The current MLIL instruction being analyzed.
+        first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction where the trace began.
+
+    Returns:
+        bool: True if tracing backward and the current instruction index is after the starting instruction, False otherwise.
+    """
+    return (
+        trace_type == SliceType.Backward
+        and mlil_loc.instr_index > first_mlil_loc.instr_index
+    )
 
 def skip_instruction(
     mlil_loc: MediumLevelILInstruction,
@@ -717,28 +808,29 @@ def skip_instruction(
     """
     Determines how to handle an MLIL instruction during taint tracing.
 
+    Args:
+        mlil_loc (MediumLevelILInstruction): The current MLIL instruction being analyzed.
+        first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction where the trace began.
+        var_to_trace (Union[TaintedStructMember, TaintedVar, TaintedGlobal, TaintedVarOffset]):
+            The variable currently being traced.
+        trace_type (SliceType): The direction of the trace (forward or backward).
+        analysis: The analysis context or object.
+        function_object (Function): The Binary Ninja function containing the instruction.
+
     Returns:
-        TraceDecision:
-            - SKIP_AND_DISCARD: Ignore instruction and variable
-            - SKIP_AND_PROCESS: Skip instruction but allow taint propagation
-            - PROCESS_AND_DISCARD: Process instruction but skip variable
-            - PROCESS_AND_TRACE: Normal tracing
+        TraceDecision: One of the following actions for the instruction:
+            - SKIP_AND_DISCARD: Ignore instruction and variable.
+            - SKIP_AND_PROCESS: Skip instruction but allow taint propagation.
+            - PROCESS_AND_DISCARD: Process instruction but skip variable.
+            - PROCESS_AND_TRACE: Normal tracing.
     """
-
-    def is_forward_in_past():
-        return (
-            trace_type == SliceType.Forward
-            and mlil_loc.instr_index < first_mlil_loc.instr_index
-        )
-
-    def is_backward_in_future():
-        return (
-            trace_type == SliceType.Backward
-            and mlil_loc.instr_index > first_mlil_loc.instr_index
-        )
-
     if not mlil_loc:
         return TraceDecision.SKIP_AND_DISCARD
+
+    if trace_type == SliceType.Forward:
+        micro_decision = micro_propagated_slice(var_to_trace, function_object, [var_to_trace])
+        if micro_decision != TraceDecision.PROCESS_AND_TRACE:
+            return TraceDecision.SKIP_AND_PROCESS
 
     if isinstance(var_to_trace, TaintedVarOffset):
         if not is_address_of_field_offset_match(mlil_loc, var_to_trace):
@@ -748,7 +840,9 @@ def skip_instruction(
         if get_connected_var(analysis, function_object, var_to_trace):
             return TraceDecision.PROCESS_AND_TRACE
 
-    if is_forward_in_past() or is_backward_in_future():
+    if is_forward_in_past(
+        trace_type, mlil_loc, first_mlil_loc
+    ) or is_backward_in_future(trace_type, mlil_loc, first_mlil_loc):
         return TraceDecision.SKIP_AND_PROCESS
 
     return TraceDecision.PROCESS_AND_TRACE
@@ -2102,8 +2196,14 @@ def get_func_param_from_call_param(bv, instr_mlil, var_to_trace):
     """
     function_object = addr_to_func(bv, instr_mlil.dest.value.value)
     if function_object:
-        call_params = [v.var if isinstance(v, (MediumLevelILVar, MediumLevelILVarSsa)) else None for v in instr_mlil.params]
-        function_params = [v.var if isinstance(v, (MediumLevelILVar, MediumLevelILVarSsa)) else None for v in function_object.parameter_vars]
+        call_params = [
+            v.var if isinstance(v, (MediumLevelILVar, MediumLevelILVarSsa)) else None
+            for v in instr_mlil.params
+        ]
+        function_params = [
+            v.var if isinstance(v, (MediumLevelILVar, MediumLevelILVarSsa)) else None
+            for v in function_object.parameter_vars
+        ]
         mapped = dict(zip(call_params, function_params))
         var_object = None
 
@@ -2169,7 +2269,10 @@ def tainted_param_in_model_sources(
     Returns:
         bool: True if the parameter is a taint source according to the model, False otherwise.
     """
-    call_parameters: List[Variable] = [v.var if isinstance(v, (MediumLevelILVar, MediumLevelILVarSsa)) else None for v in loc.params]
+    call_parameters: List[Variable] = [
+        v.var if isinstance(v, (MediumLevelILVar, MediumLevelILVarSsa)) else None
+        for v in loc.params
+    ]
     tainted_index = call_parameters.index(tainted_param.variable)
     if function_model.vararg_start_index:
         if tainted_index > function_model.vararg_start_index:
@@ -2177,5 +2280,5 @@ def tainted_param_in_model_sources(
 
     if tainted_index in function_model.taint_sources:
         return True
-    
+
     return False
