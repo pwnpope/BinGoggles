@@ -29,6 +29,7 @@ class InterprocHelper:
         original_tainted_param: Union[str, list],
         origin_function: Function,
         tainted_param_map: set,
+        analysis,
     ) -> None:
         """
         Helper class for interprocedural taint analysis and variable tracking.
@@ -41,6 +42,7 @@ class InterprocHelper:
             original_tainted_param (str | list): The original tainted parameter(s).
             origin_function (Function): The function where taint originated.
             tainted_param_map (set): Set of tainted parameter mappings.
+            analysis (Analysis): The main analysis object coordinating taint analysis.
         """
         self.binary_view = binary_view
         self.recursion_limit = 8
@@ -48,6 +50,7 @@ class InterprocHelper:
         self.origin_function = origin_function
         self.original_tainted_param = original_tainted_param
         self.tainted_param_map = tainted_param_map
+        self.analysis: "Analysis" = analysis
 
     def handle_mlil_store_ssa(self, loc, tainted_variables: set) -> None:
         """
@@ -61,7 +64,9 @@ class InterprocHelper:
             None
         """
         tainted_variables.add(
-            create_tainted_var_offset_from_load_store(loc, tainted_variables)
+            create_tainted_var_offset_from_load_store(
+                loc, tainted_variables, self.analysis
+            )
         )
 
     def gather_mlil_call_data(
@@ -132,13 +137,13 @@ class InterprocHelper:
 
         if normalized_function_name:
             interproc_results = analysis.analyze_function_taint(
-                normalized_function_name, tainted_func_param
+                normalized_function_name, tainted_func_param, mlil_loc
             )
             self.sub_functions_analyzed += 1
 
         elif imported_function:
             interproc_results = analysis.analyze_function_taint(
-                imported_function, self.original_tainted_param
+                imported_function, self.original_tainted_param, mlil_loc
             )
             self.sub_functions_analyzed += 1
 
@@ -149,7 +154,7 @@ class InterprocHelper:
 
             if resolved_function_object:
                 interproc_results = analysis.analyze_function_taint(
-                    resolved_function_object.name, self.original_tainted_param
+                    resolved_function_object.name, self.original_tainted_param, mlil_loc
                 )
 
             else:
@@ -250,12 +255,12 @@ class InterprocHelper:
         """
         match loc.operation.value:
             case MediumLevelILOperation.MLIL_STORE_SSA.value:
-                self.handle_mlil_store_ssa(loc, tainted_variables, function_node)
+                self.handle_mlil_store_ssa(loc, tainted_variables)
 
             case MediumLevelILOperation.MLIL_LOAD_SSA.value:
                 #:TODO add support for load SSA
                 ...
-            
+
             case MediumLevelILOperation.MLIL_STORE_STRUCT_SSA.value:
                 #:TODO add support for struct store
                 ...
@@ -1438,15 +1443,21 @@ class Analysis:
 
         Returns:
             InterprocTaintResult: The result of the taint analysis, including tainted parameters and return status.
-        
-        :TODO fix: i forgot which test case it was but its missing out on params tainted because of some non-existent backwards var propagation or something i forgot
+
+        :TODO fix:
+
+        1) i forgot which test case it was but its missing out on params tainted because of some non-existent backwards var propagation or something i forgot
         iirc its something to do with the variable walking logic `walk_variable`
         """
         if origin_function is None:
             origin_function = function_node
 
         i_h = InterprocHelper(
-            binary_view, original_tainted_param, origin_function, tainted_param_map
+            binary_view,
+            original_tainted_param,
+            origin_function,
+            tainted_param_map,
+            self,
         )
         function_node = i_h.convert_function_node_to_function_object(
             binary_view, function_node
@@ -1504,10 +1515,10 @@ class Analysis:
             loc = origin_function.get_llil_at(t_var.loc_address)
             if loc:
                 var_use_sites = get_use_sites(loc.mlil.ssa_form, t_var.variable)
-
-                for use_site in var_use_sites:
-                    if isinstance(use_site, MediumLevelILRet):
-                        ret_variable_tainted = True
+                if var_use_sites:
+                    for use_site in var_use_sites:
+                        if isinstance(use_site, MediumLevelILRet):
+                            ret_variable_tainted = True
 
         return InterprocTaintResult(
             tainted_param_names=tainted_parameters,
@@ -1560,7 +1571,10 @@ class Analysis:
 
     @cache
     def analyze_function_taint(
-        self, func_symbol: Union[Symbol, str], tainted_param: Variable
+        self,
+        func_symbol: Union[Symbol, str],
+        tainted_param: Variable,
+        loc: MediumLevelILInstruction,
     ) -> Union[InterprocTaintResult, FunctionModel, None]:
         """
         Analyze an imported function from a mapped library to determine if a specific parameter is tainted.
@@ -1584,7 +1598,9 @@ class Analysis:
         if isinstance(func_symbol, str) and func_symbol in [
             func.name for func in modeled_functions
         ]:
-            return modeled_functions[get_modeled_function_index(func_symbol)]
+            function_model = modeled_functions[get_modeled_function_index(func_symbol)]
+            if tainted_param_in_model_sources(function_model, loc, tainted_param):
+                return function_model
 
         # Analyze imported function
         if hasattr(func_symbol, "name"):

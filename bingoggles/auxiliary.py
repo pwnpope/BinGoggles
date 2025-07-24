@@ -796,9 +796,24 @@ def append_tainted_loc(
 def find_load_store_data(
     mlil_loc,
     already_iterated: Union[list, set],
+    analysis,
     var_to_trace=None,
+    allow_append=True,
 ) -> Union[int, Variable, SSAVariable, None]:
-    """for load/store operations"""
+    """
+    Extracts address, offset, and tainted variable information from MLIL load/store instructions.
+
+    Args:
+        mlil_loc: The MediumLevelILInstruction representing a load or store operation.
+        already_iterated (Union[list, set]): Collection of variables already identified as tainted.
+        analysis: The analysis context or object.
+        var_to_trace: (optional) The variable being specifically traced for taint.
+        allow_append (bool): Whether to append new tainted variables to the tracking collection.
+
+    Returns:
+        LoadStoreData: An object containing the extracted offset, address variable, tainted offset variable,
+        confidence level, and instruction address.
+    """
     address_variable, var_offset = None, None
     tainted_offset_var = None
     addr_var = None
@@ -822,9 +837,9 @@ def find_load_store_data(
                 addr_var = address_variable.src
                 offset = var_offset
 
-            elif isinstance(offset_variable, MediumLevelILVarSsa):
-                addr_var, offset_variable = mlil_loc.dest.operands
-                offset_variable = offset_variable.var
+            elif isinstance(var_offset, MediumLevelILVarSsa):
+                addr_var, var_offset = mlil_loc.dest.operands
+                var_offset = var_offset.var
 
             else:
                 if len(address_variable.operands) == 2:
@@ -836,10 +851,14 @@ def find_load_store_data(
                 ):
                     addr_var, offset = mlil_loc.operands[0].vars_read
 
-        if var_offset:
+        if var_offset and not isinstance(var_offset, int):
             tainted_offset_var = [
                 var.variable for var in already_iterated if var.variable == var_offset
             ]
+            if not tainted_offset_var and allow_append:
+                append_bingoggles_var_by_type(
+                    var_offset, tainted_offset_var, mlil_loc, analysis, var_to_trace
+                )
             if tainted_offset_var:
                 tainted_offset_var = tainted_offset_var[0]
 
@@ -855,6 +874,7 @@ def find_load_store_data(
 def create_tainted_var_offset_from_load_store(
     mlil_loc,
     already_iterated: Union[list, set],
+    analysis,
     var_to_trace=None,
 ) -> TaintedVarOffset:
     """
@@ -873,16 +893,18 @@ def create_tainted_var_offset_from_load_store(
 
     if var_to_trace:
         ls_data: LoadStoreData = find_load_store_data(
-            mlil_loc, already_iterated, var_to_trace
+            mlil_loc, already_iterated, analysis, var_to_trace, allow_append=False
         )
 
     else:
-        ls_data: LoadStoreData = find_load_store_data(mlil_loc, already_iterated)
+        ls_data: LoadStoreData = find_load_store_data(
+            mlil_loc, already_iterated, analysis, var_to_trace, allow_append=False
+        )
 
     return TaintedVarOffset(
         ls_data.addr_var,
         ls_data.offset,
-        ls_data.offset_var,
+        ls_data.tainted_offset_var,
         ls_data.confidence_level,
         ls_data.loc_address,
     )
@@ -1033,6 +1055,7 @@ def append_bingoggles_var_by_type(
         else:
             handle_global_var(analysis, mlil_loc, tainted_var, vars_found, var_to_trace)
 
+    #:TODO
     elif mlil_loc.operation.value in [
         MediumLevelILOperation.MLIL_LOAD_SSA.value,
         MediumLevelILOperation.MLIL_LOAD.value,
@@ -1042,7 +1065,9 @@ def append_bingoggles_var_by_type(
         if isinstance(vars_found, list):
             vars_found.append(
                 create_tainted_var_offset_from_load_store(
-                    mlil_loc, vars_found, var_to_trace
+                    mlil_loc,
+                    vars_found,
+                    var_to_trace,
                 )
             )
 
@@ -1051,6 +1076,7 @@ def append_bingoggles_var_by_type(
                 create_tainted_var_offset_from_load_store(mlil_loc, vars_found)
             )
 
+    #:TODO
     elif mlil_loc.operation.value in [
         MediumLevelILOperation.MLIL_STORE_STRUCT_SSA,
         MediumLevelILOperation.MLIL_STORE_STRUCT,
@@ -1191,110 +1217,16 @@ def propagate_mlil_store(
         )
 
     if decision in [TraceDecision.PROCESS_AND_TRACE, TraceDecision.SKIP_AND_PROCESS]:
-        address_variable, var_offset = None, None
-        offset_var_taintedvar = None
-        addr_var = None
-        offset = None
-
-        if len(mlil_loc.dest.operands) == 1:
-            addr_var = mlil_loc.dest.operands[0]
-
-        elif len(mlil_loc.dest.operands) == 2:
-            address_variable, var_offset = mlil_loc.dest.operands
-            if isinstance(var_offset, MediumLevelILConst):
-                addr_var = address_variable
-                offset = var_offset
-                var_offset = None
-            else:
-                addr_var_operands = address_variable.operands
-                if len(addr_var_operands) == 2:
-                    addr_var, var_offset = addr_var_operands
-
-                if isinstance(address_variable, MediumLevelILAddressOf):
-                    addr_var = address_variable.src
-                    offset = var_offset
-
-            if var_offset:
-                offset_var_taintedvar = [
-                    var.variable
-                    for var in already_iterated
-                    if var.variable == var_offset
-                ]
-
-        if offset_var_taintedvar:
-            vars_found.append(
-                TaintedVarOffset(
-                    variable=(
-                        addr_var if isinstance(addr_var, Variable) else addr_var.var
-                    ),
-                    offset=(
-                        offset.index if hasattr(offset, "index") else offset.value.value
-                    ),
-                    offset_var=offset_var_taintedvar,
-                    confidence_level=var_to_trace.confidence_level,
-                    loc_address=mlil_loc.address,
-                    targ_function=function_object,
-                )
+        ls_data: LoadStoreData = find_load_store_data(
+            mlil_loc, already_iterated, analysis, var_to_trace
+        )
+        if isinstance(ls_data.offset, MediumLevelILConstPtr):
+            append_bingoggles_var_by_type(
+                ls_data.offset, vars_found, mlil_loc, analysis, var_to_trace
             )
-
-        elif var_offset:
-            vars_found.append(
-                TaintedVarOffset(
-                    variable=(
-                        addr_var if isinstance(addr_var, Variable) else addr_var.var
-                    ),
-                    offset=(
-                        offset.index if hasattr(offset, "index") else offset.value.value
-                    ),
-                    offset_var=TaintedVar(
-                        variable=var_offset,
-                        confidence_level=TaintConfidence.NotTainted,
-                        loc_address=mlil_loc.address,
-                    ),
-                    confidence_level=var_to_trace.confidence_level,
-                    loc_address=mlil_loc.address,
-                    targ_function=function_object,
-                )
-            )
-            if isinstance(var_offset, MediumLevelILConstPtr):
-                glob_symbol = get_symbol_from_const_ptr(analysis.bv, var_offset)
-
-                if glob_symbol:
-                    vars_found.append(
-                        TaintedVarOffset(
-                            variable=address_variable,
-                            offset=(
-                                offset.index
-                                if hasattr(offset, "index")
-                                else offset.value.value
-                            ),
-                            offset_var=TaintedGlobal(
-                                glob_symbol.name,
-                                TaintConfidence.NotTainted,
-                                mlil_loc.address,
-                                var_offset,
-                                glob_symbol,
-                            ),
-                            confidence_level=var_to_trace.confidence_level,
-                            loc_address=mlil_loc.address,
-                            targ_function=function_object,
-                        )
-                    )
-
         else:
-            vars_found.append(
-                TaintedVarOffset(
-                    variable=(
-                        addr_var if isinstance(addr_var, Variable) else addr_var.var
-                    ),
-                    offset=(
-                        offset.index if hasattr(offset, "index") else offset.value.value
-                    ),
-                    offset_var=None,
-                    confidence_level=TaintConfidence.Tainted,
-                    loc_address=mlil_loc.address,
-                    targ_function=function_object,
-                )
+            append_bingoggles_var_by_type(
+                ls_data.addr_var, vars_found, mlil_loc, analysis, var_to_trace
             )
 
 
@@ -1524,12 +1456,12 @@ def propagate_mlil_call(
             func_analyzed = None
             if normalized_function_name:
                 func_analyzed = analysis.analyze_function_taint(
-                    normalized_function_name, var_to_trace
+                    normalized_function_name, var_to_trace, mlil_loc
                 )
 
             elif imported_function:
                 func_analyzed = analysis.analyze_function_taint(
-                    imported_function, var_to_trace
+                    imported_function, var_to_trace, mlil_loc
                 )
 
             elif not normalized_function_name and not imported_function:
@@ -1539,7 +1471,7 @@ def propagate_mlil_call(
 
                 if resolved_function_object:
                     func_analyzed = analysis.analyze_function_taint(
-                        resolved_function_object.name, var_to_trace
+                        resolved_function_object.name, var_to_trace, mlil_loc
                     )
 
                 else:
@@ -1709,7 +1641,6 @@ def propagate_mlil_set_var(
                         offset_var=offset_var_taintedvar[0],
                         confidence_level=var_to_trace.confidence_level,
                         loc_address=mlil_loc.address,
-                        targ_function=function_object,
                     )
                 )
 
@@ -2171,8 +2102,8 @@ def get_func_param_from_call_param(bv, instr_mlil, var_to_trace):
     """
     function_object = addr_to_func(bv, instr_mlil.dest.value.value)
     if function_object:
-        call_params = instr_mlil.params
-        function_params = [i for i in function_object.parameter_vars]
+        call_params = [v.var if isinstance(v, (MediumLevelILVar, MediumLevelILVarSsa)) else None for v in instr_mlil.params]
+        function_params = [v.var if isinstance(v, (MediumLevelILVar, MediumLevelILVarSsa)) else None for v in function_object.parameter_vars]
         mapped = dict(zip(call_params, function_params))
         var_object = None
 
@@ -2187,7 +2118,7 @@ def get_func_param_from_call_param(bv, instr_mlil, var_to_trace):
         tainted_func_param = None
 
         for call_param, func_param in mapped.items():
-            if hasattr(call_param, "var") and call_param.var == var_object:
+            if call_param == var_object:
                 tainted_func_param = func_param
 
         return mapped, tainted_func_param
@@ -2195,7 +2126,11 @@ def get_func_param_from_call_param(bv, instr_mlil, var_to_trace):
     else:
         return None, None
 
-def get_use_sites(loc: MediumLevelILInstruction, var: Union[SSAVariable, Variable]):
+
+def get_use_sites(
+    loc: MediumLevelILInstruction,
+    var: Union[MediumLevelILVar, MediumLevelILVarSsa, SSAVariable, Variable],
+) -> Union[None, list]:
     """
     Retrieve the use sites of a specific variable within a given MLIL instruction.
 
@@ -2212,6 +2147,35 @@ def get_use_sites(loc: MediumLevelILInstruction, var: Union[SSAVariable, Variabl
     if hasattr(loc, "vars_read"):
         vars.extend(loc.vars_read)
     for v in vars:
+        if isinstance(var, (MediumLevelILVar, MediumLevelILVarSsa)):
+            var = var.var
         if v.name == var.name:
             return v.use_sites
+
+
+def tainted_param_in_model_sources(
+    function_model: FunctionModel,
+    loc: MediumLevelILInstruction,
+    tainted_param: Variable,
+) -> bool:
+    """
+    Determines if the given tainted parameter is among the modeled taint sources for a function call.
+
+    Args:
+        function_model (FunctionModel): The function model describing taint sources and vararg index.
+        loc (MediumLevelILInstruction): The MLIL call instruction containing the call parameters.
+        tainted_param (Variable): The variable to check for taint source status.
+
+    Returns:
+        bool: True if the parameter is a taint source according to the model, False otherwise.
+    """
+    call_parameters: List[Variable] = [v.var if isinstance(v, (MediumLevelILVar, MediumLevelILVarSsa)) else None for v in loc.params]
+    tainted_index = call_parameters.index(tainted_param.variable)
+    if function_model.vararg_start_index:
+        if tainted_index > function_model.vararg_start_index:
+            return True
+
+    if tainted_index in function_model.taint_sources:
+        return True
     
+    return False

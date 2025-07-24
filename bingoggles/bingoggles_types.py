@@ -102,7 +102,7 @@ class LoadStoreData:
     ):
         self.offset = offset
         self.addr_var = addr_var
-        self.offset_var_taintedvar = tainted_offset_var
+        self.tainted_offset_var = tainted_offset_var
         self.confidence_level = confidence_level
         self.loc_address = loc_address
 
@@ -308,14 +308,12 @@ class TaintedVarOffset:
         ],
         confidence_level: TaintConfidence,
         loc_address: int,
-        targ_function: Function,
     ):
         self.variable = variable
         self.offset = offset
         self.confidence_level = confidence_level
         self.loc_address = loc_address
         self.offset_var = offset_var
-        self.function = targ_function
         self.name = str(variable)
 
     def __eq__(self, other):
@@ -327,7 +325,6 @@ class TaintedVarOffset:
             and self.confidence_level == other.confidence_level
             and self.loc_address == other.loc_address
             and self.offset_var == other.offset_var
-            and self.function == other.function
         )
 
     def __hash__(self):
@@ -337,8 +334,6 @@ class TaintedVarOffset:
                 self.offset,
                 self.confidence_level,
                 self.loc_address,
-                self.variable.function,
-                self.function,
             )
         )
 

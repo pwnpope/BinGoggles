@@ -124,8 +124,8 @@ def test_fwd_slice_param(
     pprint(tainted_vars)
     assert len(sliced_data) > 0, "No tainted locations found"
     assert (
-        len(sliced_data) == 12
-    ), f"Expected 12 tainted locations, but got {len(sliced_data)}"
+        len(sliced_data) == 14
+    ), f"Expected 14 tainted locations, but got {len(sliced_data)}"
 
 
 def test_fwd_slice_var(
