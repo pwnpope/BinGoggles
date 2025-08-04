@@ -20,7 +20,7 @@ Note: These tests assume Buildroot output exists in `test/buildroot/output/` and
 from os.path import abspath
 from pprint import pprint
 
-from bingoggles.bg import Analysis, VargFunctionCallResolver
+from bingoggles.bg import Analysis
 from bingoggles.bingoggles_types import *
 from bingoggles.modules import *
 import os
@@ -342,8 +342,7 @@ def test_is_param_tainted(
     aux = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
     # 0x080492f7    void* my_strcpy(char* d, char* s)
     data = aux.trace_function_taint(
-        function_node=0x080492F7,
-        tainted_params=tuple(["s"]),
+        function_node=0x080492F7, tainted_params=tuple(["s"]), binary_view=bv
     )
 
     assert data.is_return_tainted is True
@@ -628,9 +627,29 @@ def test_interproc_memcpy(
     aux = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
 
     _, _, tainted_vars = aux.tainted_slice(
-        #   34 @ 004019ef  rdi_1 = &var_158
-        target=TaintTarget(0x004019EF, "var_158"),
+        # 0040194b  _IO_fgets(rdi, 0x64, rdx)
+        target=TaintTarget(0x0040194B, "rdi"),
         var_type=SlicingID.FunctionVar,
     )
 
     pprint(tainted_vars)
+
+
+def test(
+    bg_init,
+    test_bin=get_bndb_path_or_original(
+        f"{bingoggles_path}/binaries/bin/test_interproc_param_tainting.bndb"
+    ),
+):
+    bg = bg_init(
+        target_bin=abspath(test_bin),
+        libraries=[],
+    )
+    bv, libraries_mapped = bg.init()
+
+    aux = Analysis(binaryview=bv, verbose=False, libraries_mapped=libraries_mapped)
+    results = aux.trace_function_taint(
+        function_node=0x00401A38, tainted_params=("temp_array"), binary_view=bv
+    )
+
+    pprint(results)

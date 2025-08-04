@@ -59,15 +59,15 @@ def flat(
 
 @cache
 def resolve_modeled_variadic_function(
-    function_object: Function,
+    function_node: Function,
     mlil_loc: MediumLevelILInstruction,
-) -> Union[FunctionModel, None]:
+) -> Optional[FunctionModel]:
     """
     Determines if a called function should have its variadic arguments patched
     based on a predefined function model. This function is intended to be called when processing an MLIL call instruction.
 
     Args:
-        function_object (binaryninja.Function): The Binary Ninja Function object
+        function_node (binaryninja.Function): The Binary Ninja Function object
             that contains the `mlil_loc` (the calling function).
         mlil_loc (binaryninja.MediumLevelILInstruction): The MLIL call instruction
             that is being analyzed. This instruction's destination (`mlil_loc.dest.value.value`)
@@ -80,7 +80,7 @@ def resolve_modeled_variadic_function(
             in Binary Ninja's analysis. Returns `None` otherwise.
     """
     function_call_address = mlil_loc.dest.value.value
-    call_func_object = function_object.view.get_function_at(function_call_address)
+    call_func_object = function_node.view.get_function_at(function_call_address)
     if hasattr(call_func_object, "name"):
         call_name = call_func_object.name
         function_model = get_function_model(call_name)
@@ -97,7 +97,7 @@ def resolve_modeled_variadic_function(
 
 
 def patch_function_params(
-    function_object: Function,
+    function_node: Function,
     mlil_loc: MediumLevelILInstruction,
     function_model: FunctionModel,
 ) -> None:
@@ -105,7 +105,7 @@ def patch_function_params(
     Applies a programmatically determined variadic type to a Binary Ninja function.
 
     Args:
-        function_object (binaryninja.Function): The Binary Ninja Function object
+        function_node (binaryninja.Function): The Binary Ninja Function object
             representing the function that contains the MLIL call instruction.
         mlil_loc (binaryninja.MediumLevelILInstruction): The MLIL call instruction
             whose destination points to the function being patched.
@@ -113,7 +113,7 @@ def patch_function_params(
             information about the called function.
     """
     function_call_address = mlil_loc.dest.value.value
-    call_func_object = function_object.view.get_function_at(function_call_address)
+    call_func_object = function_node.view.get_function_at(function_call_address)
     varg_start_index = function_model.vararg_start_index
 
     new_params = list(call_func_object.type.parameters)[:varg_start_index]
@@ -193,9 +193,9 @@ def get_struct_field_refs(
     func_object = bv.get_functions_containing(tainted_struct_member.loc_address)[0]
     mlil_use_sites = set()
     struct_ops = [
-        int(MediumLevelILOperation.MLIL_LOAD_STRUCT),
-        int(MediumLevelILOperation.MLIL_VAR_FIELD),
-        int(MediumLevelILOperation.MLIL_STORE_STRUCT),
+        MediumLevelILOperation.MLIL_LOAD_STRUCT.value,
+        MediumLevelILOperation.MLIL_VAR_FIELD.value,
+        MediumLevelILOperation.MLIL_STORE_STRUCT.value,
     ]
 
     for block in func_object.mlil:
@@ -206,20 +206,23 @@ def get_struct_field_refs(
                 and hasattr(instr_mlil.src, "operation")
                 and instr_mlil.src.operation in struct_ops
             ):
-                if instr_mlil.operation == int(
-                    MediumLevelILOperation.MLIL_STORE_STRUCT
+                if (
+                    instr_mlil.operation
+                    == MediumLevelILOperation.MLIL_STORE_STRUCT.value
                 ):
                     if instr_mlil.offset == tainted_struct_member.offset:
                         mlil_use_sites.add(instr_mlil)
 
-                elif instr_mlil.src.operation == int(
-                    MediumLevelILOperation.MLIL_LOAD_STRUCT
+                elif (
+                    instr_mlil.src.operation
+                    == MediumLevelILOperation.MLIL_LOAD_STRUCT.value
                 ):
                     if instr_mlil.src.offset == tainted_struct_member.offset:
                         mlil_use_sites.add(instr_mlil)
 
-                elif instr_mlil.src.operation == int(
-                    MediumLevelILOperation.MLIL_VAR_FIELD
+                elif (
+                    instr_mlil.src.operation
+                    == MediumLevelILOperation.MLIL_VAR_FIELD.value
                 ):
                     if instr_mlil.src.offset == tainted_struct_member.offset:
                         mlil_use_sites.add(instr_mlil)
@@ -256,7 +259,7 @@ def param_var_map(
     return param_info
 
 
-def addr_to_func(bv: BinaryView, address: int) -> Function | None:
+def addr_to_func(bv: BinaryView, address: int) -> Optional[Function]:
     """
     `addr_to_func` Get the function object from an address
 
@@ -267,15 +270,15 @@ def addr_to_func(bv: BinaryView, address: int) -> Function | None:
     Returns:
         Binary ninja function object
     """
-    function_object = bv.get_functions_containing(address)
-    if function_object:
-        return function_object[0]
+    function_node = bv.get_functions_containing(address)
+    if function_node:
+        return function_node[0]
 
     else:
         return None
 
 
-def func_name_to_object(bv: BinaryView, func_name: str) -> int | None:
+def func_name_to_object(bv: BinaryView, func_name: str) -> Optional[None]:
     """
     `func_name_to_object` Get a function address from a name
 
@@ -361,10 +364,10 @@ def get_struct_field_name(loc: MediumLevelILInstruction):
     Returns:
         str: The name of the struct field referenced in the instruction tokens.
     """
-    if loc.operation == int(MediumLevelILOperation.MLIL_SET_VAR):
+    if loc.operation == MediumLevelILOperation.MLIL_SET_VAR.value:
         return loc.tokens[-1].text
 
-    elif loc.operation == int(MediumLevelILOperation.MLIL_STORE_STRUCT):
+    elif loc.operation == MediumLevelILOperation.MLIL_STORE_STRUCT.value:
         field_name_index = next(
             (i for i, t in enumerate(loc.tokens) if t.text == " = "), None
         )
@@ -375,8 +378,8 @@ def get_struct_field_name(loc: MediumLevelILInstruction):
 
 @cache
 def get_mlil_glob_refs(
-    analysis, function_object: Function, var_to_trace: TaintedGlobal
-) -> list:
+    analysis, function_node: Function, var_to_trace: TaintedGlobal
+) -> List:
     """
     Finds all MLIL instructions that reference a given global variable.
 
@@ -386,7 +389,7 @@ def get_mlil_glob_refs(
 
     Args:
         analysis (Analysis): The analysis context containing the Binary Ninja BinaryView.
-        function_object (Function): The function in which to search for global variable references.
+        function_node (Function): The function in which to search for global variable references.
         var_to_trace (TaintedGlobal): The global variable to track in the function.
 
     Returns:
@@ -396,7 +399,7 @@ def get_mlil_glob_refs(
     if var_to_trace.variable in analysis.glob_refs_memoized.keys():
         return analysis.glob_refs_memoized[var_to_trace.variable]
 
-    for instr_mlil in function_object.mlil.instructions:
+    for instr_mlil in function_node.mlil.instructions:
         for op in flat(instr_mlil.operands):
             if isinstance(op, MediumLevelILConstPtr):
                 symbol = get_symbol_from_const_ptr(analysis.bv, op)
@@ -422,15 +425,15 @@ def is_rw_operation(instr_mlil: MediumLevelILInstruction):
         bool: True if the instruction and its relevant subexpressions are read/write operations, False otherwise.
     """
     read_write_ops = [
-        int(MediumLevelILOperation.MLIL_SET_VAR),
-        int(MediumLevelILOperation.MLIL_SET_VAR_ALIASED),
-        int(MediumLevelILOperation.MLIL_SET_VAR_ALIASED_FIELD),
-        int(MediumLevelILOperation.MLIL_SET_VAR_FIELD),
-        int(MediumLevelILOperation.MLIL_SET_VAR_SPLIT),
-        int(MediumLevelILOperation.MLIL_LOAD),
-        int(MediumLevelILOperation.MLIL_LOAD_STRUCT),
-        int(MediumLevelILOperation.MLIL_STORE),
-        int(MediumLevelILOperation.MLIL_STORE_STRUCT),
+        MediumLevelILOperation.MLIL_SET_VAR.value,
+        MediumLevelILOperation.MLIL_SET_VAR_ALIASED.value,
+        MediumLevelILOperation.MLIL_SET_VAR_ALIASED_FIELD.value,
+        MediumLevelILOperation.MLIL_SET_VAR_FIELD.value,
+        MediumLevelILOperation.MLIL_SET_VAR_SPLIT.value,
+        MediumLevelILOperation.MLIL_LOAD.value,
+        MediumLevelILOperation.MLIL_LOAD_STRUCT.value,
+        MediumLevelILOperation.MLIL_STORE.value,
+        MediumLevelILOperation.MLIL_STORE_STRUCT.value,
     ]
 
     def op_is_rw(il):
@@ -442,7 +445,7 @@ def is_rw_operation(instr_mlil: MediumLevelILInstruction):
     return True
 
 
-def get_section_by_addr(binary_view: BinaryView, address: int) -> Union[str, None]:
+def get_section_by_addr(binary_view: BinaryView, address: int) -> Optional[str]:
     """
     Get the section name that contains the given address in the binary.
 
@@ -463,9 +466,7 @@ def get_section_by_addr(binary_view: BinaryView, address: int) -> Union[str, Non
 
 
 @cache
-def resolve_got_callsite(
-    binary_view: BinaryView, call_addr: int
-) -> Union[Function, None]:
+def resolve_got_callsite(binary_view: BinaryView, call_addr: int) -> Optional[Function]:
     """
     Resolve a function call site to its corresponding Global Offset Table (GOT) entry.
 
@@ -488,7 +489,7 @@ def resolve_got_callsite(
     if len(mlil_blocks) < 2:
         for block in mlil_blocks:
             for instr in block:
-                if instr.operation == int(MediumLevelILOperation.MLIL_JUMP):
+                if instr.operation == MediumLevelILOperation.MLIL_JUMP.value:
                     entry_address = instr.dest.src.value.value
                     section_name = get_section_by_addr(binary_view, entry_address)
                     section = binary_view.sections.get(section_name)
@@ -509,11 +510,11 @@ def resolve_got_callsite(
 
 def get_connected_var(
     analysis,
-    function_object: Function,
+    function_node: Function,
     target_variable: Union[
-        TaintedVar, TaintedGlobal, TaintedVarOffset, TaintedStructMember
+        TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
     ],
-) -> Union[Variable, None]:
+) -> Optional[Variable]:
     """
     Identifies the most recent source variable that was assigned to the given target variable.
 
@@ -525,7 +526,7 @@ def get_connected_var(
 
     Args:
         analysis (Analysis): The analysis engine instance that provides context and utilities.
-        function_object (Function): Binary Ninja function object where the variable is located.
+        function_node (Function): Binary Ninja function object where the variable is located.
         target_variable (TaintedVar | TaintedGlobal | TaintedVarOffset | TaintedStructMember):
             The variable whose source (vars_read) should be located.
 
@@ -537,10 +538,10 @@ def get_connected_var(
     connected_candidates = []
 
     if isinstance(target_variable, (TaintedVar, TaintedVarOffset)):
-        refs = function_object.get_mlil_var_refs(target_variable.variable)
+        refs = extract_var_use_sites(target_variable, function_node, analysis)
 
         for ref in refs:
-            mlil = function_object.get_llil_at(ref.address).mlil
+            mlil = function_node.get_llil_at(ref.address).mlil
             if not mlil:
                 continue
 
@@ -552,10 +553,10 @@ def get_connected_var(
                 connected_candidates.append((mlil.address, mlil.vars_read[0]))
 
     elif isinstance(target_variable, TaintedGlobal):
-        refs = get_mlil_glob_refs(analysis, function_object, target_variable)
+        refs = get_mlil_glob_refs(analysis, function_node, target_variable)
 
         for ref in refs:
-            mlil = function_object.get_llil_at(ref.address).mlil
+            mlil = function_node.get_llil_at(ref.address).mlil
             if not mlil:
                 continue
 
@@ -568,10 +569,10 @@ def get_connected_var(
 
     elif isinstance(target_variable, TaintedStructMember):
         # Struct members may propagate from field access or assignment
-        refs = get_struct_field_refs(function_object.view, target_variable)
+        refs = get_struct_field_refs(function_node.view, target_variable)
 
         for ref in refs:
-            mlil = function_object.get_llil_at(ref.address).mlil
+            mlil = function_node.get_llil_at(ref.address).mlil
             if not mlil:
                 continue
 
@@ -588,9 +589,10 @@ def get_connected_var(
 def init_vars_found(
     mlil_loc: Union[MediumLevelILInstruction, int],
     variable: Union[
-        TaintedVar, Variable, TaintedStructMember, TaintedStructMember, TaintedVarOffset
+        Union[TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar],
+        Variable,
     ],
-) -> list:
+) -> List:
     """
     Initializes the taint tracking list with the appropriate representation of the target variable.
 
@@ -603,7 +605,9 @@ def init_vars_found(
     Args:
         mlil_loc (MediumLevelILInstruction | int): The MLIL instruction or address where the variable
             is first identified during analysis.
-        variable (Union[TaintedVar, Variable, TaintedStructMember, TaintedVarOffset]):
+        variable (Union[
+            TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
+        ] | Variable):
             The variable to initialize for taint tracking.
 
     Returns:
@@ -642,7 +646,9 @@ def get_var_name(
     to normalize variable names for comparison, hashing, or display purposes.
 
     Args:
-        v (Union[TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar]):
+        v Union[
+            TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
+        ]:
             A taint-wrapped variable object from the analysis framework.
 
     Returns:
@@ -669,11 +675,11 @@ def get_var_name(
 
 def extract_var_use_sites(
     var_to_trace: Union[
-        TaintedGlobal, TaintedStructMember, TaintedVar, TaintedVarOffset
+        TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
     ],
-    function_object: Function,
+    function_node: Function,
     analysis,
-) -> list:
+) -> List:
     """
     Extracts all MLIL use sites for a given variable within a function.
 
@@ -686,31 +692,37 @@ def extract_var_use_sites(
       built-in MLIL variable reference retrieval.
 
     Args:
-        var_to_trace (Union[TaintedGlobal, TaintedStructMember, TaintedVar, TaintedVarOffset]):
-            The tainted variable object to analyze for use sites.
-        function_object (Function): The Binary Ninja function in which to search for use.
+        var_to_trace (Union[
+            TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
+        ]): The tainted variable object to analyze for use sites.
+        function_node (Function): The Binary Ninja function in which to search for use.
         analysis (Analysis): The analysis context providing helpers and binary view access.
 
     Returns:
         list: A list of `MediumLevelILInstruction` objects where the variable is used.
     """
     if isinstance(var_to_trace, TaintedGlobal):
-        return get_mlil_glob_refs(analysis, function_object, var_to_trace)
+        return get_mlil_glob_refs(analysis, function_node, var_to_trace)
 
     elif isinstance(var_to_trace, TaintedStructMember):
         return get_struct_field_refs(analysis.bv, var_to_trace)
 
     else:
-        return function_object.get_mlil_var_refs(var_to_trace.variable)
+        #:TODO add accuracy tracking for TaintedVarOffset
+        return function_node.get_mlil_var_refs(
+            var_to_trace.variable if hasattr(var_to_trace, "variable") else var_to_trace
+        )
+
 
 @cache
 def micro_propagated_slice(
     var_to_trace: Union[
-        TaintedVar, TaintedGlobal, TaintedVarOffset, TaintedStructMember
+        TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
     ],
     function_node: Function,
     vars_found: list,
-    max_depth=8
+    analysis,
+    max_depth=8,
 ) -> TraceDecision:
     """
     Recursively determines if, when tracing backward from `var_to_trace`, any variables in its propagation chain
@@ -720,21 +732,23 @@ def micro_propagated_slice(
     present in `vars_found`. The recursion is bounded by `max_depth` to prevent infinite loops.
 
     Args:
-        var_to_trace (Union[TaintedVar, TaintedGlobal, TaintedVarOffset, TaintedStructMember]):
+        var_to_trace (Union[
+            TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
+        ]):
             The variable currently being analyzed for backward propagation.
         function_node (Function): The Binary Ninja function context for the analysis.
         vars_found (list): List of variables already visited in the current trace (to avoid cycles).
         max_depth (int, optional): Maximum recursion depth for the search. Defaults to 5.
 
     Returns:
-        TraceDecision: 
+        TraceDecision:
             - PROCESS_AND_TRACE if further propagation is possible (i.e., a parent variable can influence later instructions).
             - SKIP_AND_PROCESS otherwise.
     """
     if max_depth == 0:
         return TraceDecision.SKIP_AND_PROCESS
 
-    refs = function_node.get_mlil_var_refs(var_to_trace.variable if hasattr(var_to_trace, "variable") else var_to_trace)
+    refs = extract_var_use_sites(var_to_trace, function_node, analysis)
     for ref in refs:
         loc = function_node.get_llil_at(ref.address).mlil
         if hasattr(loc, "vars_read") and loc.vars_read:
@@ -742,15 +756,27 @@ def micro_propagated_slice(
                 if any(getattr(v, "variable", None) == parent_var for v in vars_found):
                     continue
 
-                parent_refs = function_node.get_mlil_var_refs(parent_var)
+                parent_refs = extract_var_use_sites(parent_var, function_node, analysis)
                 for parent_ref in parent_refs:
-                    if parent_ref.address > getattr(var_to_trace, "addr", getattr(var_to_trace, "loc_address", 0)):
+                    if parent_ref.address > getattr(
+                        var_to_trace, "addr", getattr(var_to_trace, "loc_address", 0)
+                    ):
                         return TraceDecision.PROCESS_AND_TRACE
 
-                if micro_propagated_slice(parent_var, function_node, vars_found + [var_to_trace], max_depth-1) == TraceDecision.PROCESS_AND_TRACE:
+                if (
+                    micro_propagated_slice(
+                        parent_var,
+                        function_node,
+                        tuple(list(vars_found) + [var_to_trace]),
+                        analysis,
+                        max_depth - 1,
+                    )
+                    == TraceDecision.PROCESS_AND_TRACE
+                ):
                     return TraceDecision.PROCESS_AND_TRACE
 
     return TraceDecision.SKIP_AND_PROCESS
+
 
 def is_forward_in_past(
     trace_type: SliceType,
@@ -795,15 +821,17 @@ def is_backward_in_future(
         and mlil_loc.instr_index > first_mlil_loc.instr_index
     )
 
+
 def skip_instruction(
     mlil_loc: MediumLevelILInstruction,
     first_mlil_loc: MediumLevelILInstruction,
     var_to_trace: Union[
-        TaintedStructMember, TaintedVar, TaintedGlobal, TaintedVarOffset
+        TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
     ],
     trace_type: SliceType,
     analysis,
-    function_object: Function,
+    function_node: Function,
+    vars_found,
 ) -> TraceDecision:
     """
     Determines how to handle an MLIL instruction during taint tracing.
@@ -811,11 +839,13 @@ def skip_instruction(
     Args:
         mlil_loc (MediumLevelILInstruction): The current MLIL instruction being analyzed.
         first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction where the trace began.
-        var_to_trace (Union[TaintedStructMember, TaintedVar, TaintedGlobal, TaintedVarOffset]):
+        var_to_trace (Union[
+            TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
+        ]):
             The variable currently being traced.
         trace_type (SliceType): The direction of the trace (forward or backward).
         analysis: The analysis context or object.
-        function_object (Function): The Binary Ninja function containing the instruction.
+        function_node (Function): The Binary Ninja function containing the instruction.
 
     Returns:
         TraceDecision: One of the following actions for the instruction:
@@ -828,7 +858,9 @@ def skip_instruction(
         return TraceDecision.SKIP_AND_DISCARD
 
     if trace_type == SliceType.Forward:
-        micro_decision = micro_propagated_slice(var_to_trace, function_object, [var_to_trace])
+        micro_decision = micro_propagated_slice(
+            var_to_trace, function_node, tuple(vars_found), analysis
+        )
         if micro_decision != TraceDecision.PROCESS_AND_TRACE:
             return TraceDecision.SKIP_AND_PROCESS
 
@@ -837,7 +869,7 @@ def skip_instruction(
             return TraceDecision.PROCESS_AND_DISCARD
 
     if first_mlil_loc.address == var_to_trace.loc_address:
-        if get_connected_var(analysis, function_object, var_to_trace):
+        if get_connected_var(analysis, function_node, var_to_trace):
             return TraceDecision.PROCESS_AND_TRACE
 
     if is_forward_in_past(
@@ -849,11 +881,11 @@ def skip_instruction(
 
 
 def append_tainted_loc(
-    function_object: Function,
+    function_node: Function,
     collected_locs: List[TaintedLOC],
     mlil_loc: MediumLevelILInstruction,
     var_to_trace: Union[
-        TaintedStructMember, TaintedVar, TaintedGlobal, TaintedVarOffset
+        TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
     ],
     analysis,
 ) -> None:
@@ -864,10 +896,12 @@ def append_tainted_loc(
     resolves its connected variable, and stores the taint information.
 
     Args:
-        function_object (Function): The function containing the instruction.
+        function_node (Function): The function containing the instruction.
         collected_locs (List[TaintedLOC]): The running list of collected taint locations.
         mlil_loc (MediumLevelILInstruction): The MLIL instruction to associate with the taint.
-        var_to_trace (Union[TaintedStructMember, TaintedVar, TaintedGlobal, TaintedVarOffset]):
+        var_to_trace (Union[
+            TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
+        ]):
             The variable being traced for taint.
         analysis (Analysis): The analysis engine (BinGoggles `Analysis` class).
     """
@@ -878,11 +912,11 @@ def append_tainted_loc(
             var_to_trace,
             get_connected_var(
                 analysis=analysis,
-                function_object=function_object,
+                function_node=function_node,
                 target_variable=var_to_trace,
             ),
             var_to_trace.confidence_level,
-            function_object=function_object,
+            function_node=function_node,
         )
     )
 
@@ -1009,7 +1043,7 @@ def create_tainted_global(
     global_var: MediumLevelILConstPtr,
     confidence_level: TaintConfidence,
     mlil_loc: MediumLevelILInstruction,
-) -> Union[None, TaintedGlobal]:
+) -> Optional[TaintedGlobal]:
     """
     Creates a TaintedGlobal object if the given MLIL constant pointer resolves to a global symbol.
 
@@ -1058,7 +1092,7 @@ def create_tainted_var(tainted_var, confidence_level, mlil_loc):
 
 def handle_tainted_var(
     tainted_var: Union[Variable, SSAVariable, MediumLevelILVar, MediumLevelILVarSsa],
-    vars_found: Union[list, set],
+    vars_found: Union[List, set],
     mlil_loc: MediumLevelILInstruction,
     var_to_trace=None,
 ):
@@ -1068,7 +1102,7 @@ def handle_tainted_var(
     Args:
         tainted_var (Union[Variable, SSAVariable, MediumLevelILVar, MediumLevelILVarSsa]):
             The variable identified as tainted. It can be various forms of Binary Ninja variables.
-        vars_found (Union[list, set]): The collection (list or set) to which the tainted variable will be added.
+        vars_found (Union[List, set]): The collection (list or set) to which the tainted variable will be added.
         mlil_loc (MediumLevelILInstruction): The MLIL instruction where the taint was identified.
         var_to_trace: An optional object (e.g., TaintedVar) representing a specific variable being traced.
                       If provided, its `confidence_level` is used when adding to a list, and an additional
@@ -1179,7 +1213,7 @@ def append_bingoggles_var_by_type(
 
 
 def propagate_mlil_store_struct(
-    function_object: Function,
+    function_node: Function,
     mlil_loc: MediumLevelILInstruction,
     collected_locs: list,
     var_to_trace: Union[
@@ -1197,7 +1231,7 @@ def propagate_mlil_store_struct(
     assigned or loaded, and appends the corresponding `TaintedLOC` to the trace.
 
     Args:
-        function_object: The Binary Ninja function context.
+        function_node: The Binary Ninja function context.
         mlil_loc: The MLIL instruction performing the store or assignment.
         collected_locs: List to track visited tainted locations.
         var_to_trace: The current tainted variable being traced.
@@ -1213,16 +1247,17 @@ def propagate_mlil_store_struct(
         var_to_trace,
         trace_type,
         analysis,
-        function_object,
+        function_node,
+        vars_found,
     )
     if decision in [TraceDecision.PROCESS_AND_TRACE, TraceDecision.PROCESS_AND_DISCARD]:
         append_tainted_loc(
-            function_object, collected_locs, mlil_loc, var_to_trace, analysis
+            function_node, collected_locs, mlil_loc, var_to_trace, analysis
         )
 
     if decision in [TraceDecision.PROCESS_AND_TRACE, TraceDecision.SKIP_AND_PROCESS]:
         struct_offset = mlil_loc.ssa_form.offset
-        instr_hlil = function_object.get_llil_at(mlil_loc.address).hlil
+        instr_hlil = function_node.get_llil_at(mlil_loc.address).hlil
 
         if instr_hlil.operation == int(HighLevelILOperation.HLIL_ASSIGN):
             lhs = instr_hlil.dest
@@ -1244,12 +1279,12 @@ def propagate_mlil_store_struct(
 
                     vars_found.append(tainted_struct_member)
 
-        elif mlil_loc.operation == int(MediumLevelILOperation.MLIL_SET_VAR):
+        elif mlil_loc.operation == MediumLevelILOperation.MLIL_SET_VAR.value:
             struct_offset = mlil_loc.ssa_form.src.offset
             source = mlil_loc.src
             source_hlil = instr_hlil.src
 
-            if source.operation == int(MediumLevelILOperation.MLIL_LOAD_STRUCT):
+            if source.operation == MediumLevelILOperation.MLIL_LOAD_STRUCT.value:
                 base_var = source_hlil.var
                 tainted_struct_member = TaintedStructMember(
                     loc_address=mlil_loc.address,
@@ -1264,11 +1299,11 @@ def propagate_mlil_store_struct(
 
 
 def propagate_mlil_store(
-    function_object: Function,
+    function_node: Function,
     mlil_loc: MediumLevelILInstruction,
     collected_locs: list,
     var_to_trace: Union[
-        TaintedStructMember, TaintedVar, TaintedGlobal, TaintedVarOffset
+        TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
     ],
     vars_found: list,
     already_iterated: list,
@@ -1285,10 +1320,12 @@ def propagate_mlil_store(
     (as `TaintedVarOffset`) to the taint tracking list and records the instruction location.
 
     Args:
-        function_object (Function): The function containing the MLIL instruction.
+        function_node (Function): The function containing the MLIL instruction.
         mlil_loc (MediumLevelILInstruction): The store instruction being analyzed.
         collected_locs (list): List of `TaintedLOC` objects visited during this trace.
-        var_to_trace (Union[TaintedStructMember, TaintedVar, TaintedGlobal, TaintedVarOffset]):
+        var_to_trace (Union[
+            TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
+        ]):
             The variable from which taint is being propagated.
         vars_found (list): A list that will be updated with newly discovered tainted variables.
         already_iterated (list): A list of previously visited variables, used to determine taint propagation.
@@ -1303,11 +1340,12 @@ def propagate_mlil_store(
         var_to_trace,
         trace_type,
         analysis,
-        function_object,
+        function_node,
+        vars_found,
     )
     if decision in [TraceDecision.PROCESS_AND_TRACE, TraceDecision.PROCESS_AND_DISCARD]:
         append_tainted_loc(
-            function_object, collected_locs, mlil_loc, var_to_trace, analysis
+            function_node, collected_locs, mlil_loc, var_to_trace, analysis
         )
 
     if decision in [TraceDecision.PROCESS_AND_TRACE, TraceDecision.SKIP_AND_PROCESS]:
@@ -1430,7 +1468,7 @@ def analyze_function_model(
 def analyze_new_imported_function(
     mlil_loc: MediumLevelILInstruction,
     var_to_trace: Union[
-        TaintedStructMember, TaintedVar, TaintedGlobal, TaintedVarOffset
+        TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
     ],
     vars_found: list,
     analysis,
@@ -1448,7 +1486,9 @@ def analyze_new_imported_function(
 
     Args:
         mlil_loc (MediumLevelILInstruction): The MLIL instruction for the function call.
-        var_to_trace (Union[TaintedStructMember, TaintedVar, TaintedGlobal, TaintedVarOffset]):
+        var_to_trace (Union[
+            TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
+        ]):
             The original variable being traced for taint.
         vars_found (list): List of new tainted variables discovered via interprocedural analysis.
         analysis (Analysis): The main `Analysis` object handling taint propagation and resolution.
@@ -1462,7 +1502,7 @@ def analyze_new_imported_function(
     if call_func_object:
         interproc_results = analysis.trace_function_taint(
             function_node=call_func_object,
-            tainted_param=tainted_func_param,
+            tainted_params=tainted_func_param,
             binary_view=analysis.bv,
         )
 
@@ -1495,7 +1535,7 @@ def analyze_new_imported_function(
 
 
 def propagate_mlil_call(
-    function_object: Function,
+    function_node: Function,
     mlil_loc: MediumLevelILInstruction,
     collected_locs: list,
     var_to_trace: Union[
@@ -1516,7 +1556,7 @@ def propagate_mlil_call(
     functions.
 
     Args:
-        function_object (Function): The Binary Ninja function containing the call.
+        function_node (Function): The Binary Ninja function containing the call.
         mlil_loc (MediumLevelILInstruction): The MLIL call instruction being analyzed.
         collected_locs (list): List of previously recorded tainted locations.
         var_to_trace: The original tainted variable being traced.
@@ -1533,18 +1573,19 @@ def propagate_mlil_call(
         var_to_trace,
         trace_type,
         analysis,
-        function_object,
+        function_node,
+        vars_found,
     )
     if decision in [TraceDecision.PROCESS_AND_TRACE, TraceDecision.PROCESS_AND_DISCARD]:
         append_tainted_loc(
-            function_object, collected_locs, mlil_loc, var_to_trace, analysis
+            function_node, collected_locs, mlil_loc, var_to_trace, analysis
         )
 
     if decision in [TraceDecision.PROCESS_AND_TRACE, TraceDecision.SKIP_AND_PROCESS]:
         if mlil_loc.params:
             imported_function = analysis.resolve_function_type(mlil_loc)
             normalized_function_name = get_modeled_function_name_at_callsite(
-                function_object, mlil_loc
+                function_node, mlil_loc
             )
 
             func_analyzed = None
@@ -1560,7 +1601,7 @@ def propagate_mlil_call(
 
             elif not normalized_function_name and not imported_function:
                 resolved_function_object = resolve_got_callsite(
-                    function_object.view, mlil_loc.dest.value.value
+                    function_node.view, mlil_loc.dest.value.value
                 )
 
                 if resolved_function_object:
@@ -1580,7 +1621,7 @@ def propagate_mlil_call(
                     if call_func_object:
                         func_analyzed = analysis.trace_function_taint(
                             function_node=call_func_object,
-                            tainted_param=tainted_func_param,
+                            tainted_params=tainted_func_param,
                             binary_view=analysis.bv,
                         )
 
@@ -1604,10 +1645,10 @@ def propagate_mlil_call(
                     )
                 )
 
-                for _, var in zipped_results:
+                for tainted_function_param, call_param in zipped_results:
                     # Wrap each tainted parameter into the appropriate BinGoggles taint type
                     append_bingoggles_var_by_type(
-                        var, vars_found, mlil_loc, analysis, var_to_trace
+                        call_param, vars_found, mlil_loc, analysis, var_to_trace
                     )
 
                 if func_analyzed.is_return_tainted:
@@ -1652,7 +1693,7 @@ def add_read_var(
 
 
 def propagate_mlil_set_var(
-    function_object: Function,
+    function_node: Function,
     mlil_loc: MediumLevelILInstruction,
     vars_found: list,
     already_iterated: list,
@@ -1672,7 +1713,7 @@ def propagate_mlil_set_var(
     which are wrapped as `TaintedVarOffset` if taint propagation applies.
 
     Args:
-        function_object (Function): The Binary Ninja function containing the instruction.
+        function_node (Function): The Binary Ninja function containing the instruction.
         mlil_loc (MediumLevelILInstruction): The MLIL_SET_VAR instruction to analyze.
         vars_found (list): Worklist queue to which new tainted variables are added.
         already_iterated (list): List of previously traced tainted variables (for recursion guard).
@@ -1689,12 +1730,13 @@ def propagate_mlil_set_var(
         var_to_trace,
         trace_type,
         analysis,
-        function_object,
+        function_node,
+        vars_found,
     )
 
     if decision in [TraceDecision.PROCESS_AND_TRACE, TraceDecision.PROCESS_AND_DISCARD]:
         append_tainted_loc(
-            function_object, collected_locs, mlil_loc, var_to_trace, analysis
+            function_node, collected_locs, mlil_loc, var_to_trace, analysis
         )
 
     if decision in [TraceDecision.PROCESS_AND_TRACE, TraceDecision.SKIP_AND_PROCESS]:
@@ -1764,7 +1806,7 @@ def propagate_mlil_set_var(
 
 
 def propagate_mlil_set_var_field(
-    function_object: Function,
+    function_node: Function,
     mlil_loc: MediumLevelILInstruction,
     vars_found: list,
     var_to_trace: Union[
@@ -1782,7 +1824,7 @@ def propagate_mlil_set_var_field(
     taint into the destination variable and records the instruction as a tainted location.
 
     Args:
-        function_object (Function): The Binary Ninja function containing the instruction.
+        function_node (Function): The Binary Ninja function containing the instruction.
         mlil_loc (MediumLevelILInstruction): The MLIL instruction performing the field assignment.
         vars_found (list): Queue of tainted variables to be analyzed.
         var_to_trace: The original tainted variable being traced.
@@ -1798,11 +1840,12 @@ def propagate_mlil_set_var_field(
         var_to_trace,
         trace_type,
         analysis,
-        function_object,
+        function_node,
+        vars_found,
     )
     if decision in [TraceDecision.PROCESS_AND_TRACE, TraceDecision.PROCESS_AND_DISCARD]:
         append_tainted_loc(
-            function_object, collected_locs, mlil_loc, var_to_trace, analysis
+            function_node, collected_locs, mlil_loc, var_to_trace, analysis
         )
 
     if decision in [TraceDecision.PROCESS_AND_TRACE, TraceDecision.SKIP_AND_PROCESS]:
@@ -1812,7 +1855,7 @@ def propagate_mlil_set_var_field(
 
 
 def propagate_mlil_unhandled_operation(
-    function_object: Function,
+    function_node: Function,
     mlil_loc: MediumLevelILInstruction,
     vars_found: list,
     var_to_trace: Union[
@@ -1831,7 +1874,7 @@ def propagate_mlil_unhandled_operation(
     as a tainted location.
 
     Args:
-        function_object (Function): The Binary Ninja function containing the instruction.
+        function_node (Function): The Binary Ninja function containing the instruction.
         mlil_loc (MediumLevelILInstruction): The MLIL instruction to analyze.
         vars_found (list): Worklist queue to which new tainted variables are added.
         var_to_trace: The current tainted variable being traced.
@@ -1847,11 +1890,12 @@ def propagate_mlil_unhandled_operation(
         var_to_trace,
         trace_type,
         analysis,
-        function_object,
+        function_node,
+        vars_found,
     )
     if decision in [TraceDecision.PROCESS_AND_TRACE, TraceDecision.PROCESS_AND_DISCARD]:
         append_tainted_loc(
-            function_object, collected_locs, mlil_loc, var_to_trace, analysis
+            function_node, collected_locs, mlil_loc, var_to_trace, analysis
         )
 
     if decision in [TraceDecision.PROCESS_AND_TRACE, TraceDecision.SKIP_AND_PROCESS]:
@@ -1903,7 +1947,7 @@ def sort_collected_locs(
 
 
 def propagate_by_mlil_operation(
-    function_object: Function,
+    function_node: Function,
     mlil_loc: MediumLevelILInstruction,
     vars_found: list,
     var_to_trace: Union[
@@ -1924,7 +1968,7 @@ def propagate_by_mlil_operation(
     new tainted variables and recording the tainted instruction.
 
     Args:
-        function_object (Function): The Binary Ninja function containing the instruction.
+        function_node (Function): The Binary Ninja function containing the instruction.
         mlil_loc (MediumLevelILInstruction): The instruction to process.
         vars_found (list): Worklist queue for tainted variables pending analysis.
         var_to_trace: The variable currently being traced through the program.
@@ -1935,10 +1979,10 @@ def propagate_by_mlil_operation(
         first_mlil_loc (MediumLevelILInstruction): The initial MLIL instruction that began the trace.
             Used for controlling trace range and instruction relevance based on direction.
     """
-    match int(mlil_loc.operation):
-        case int(MediumLevelILOperation.MLIL_STORE_STRUCT):
+    match mlil_loc.operation.value:
+        case MediumLevelILOperation.MLIL_STORE_STRUCT.value:
             propagate_mlil_store_struct(
-                function_object,
+                function_node,
                 mlil_loc,
                 collected_locs,
                 var_to_trace,
@@ -1948,9 +1992,9 @@ def propagate_by_mlil_operation(
                 first_mlil_loc,
             )
 
-        case int(MediumLevelILOperation.MLIL_STORE):
+        case MediumLevelILOperation.MLIL_STORE.value:
             propagate_mlil_store(
-                function_object,
+                function_node,
                 mlil_loc,
                 collected_locs,
                 var_to_trace,
@@ -1961,9 +2005,9 @@ def propagate_by_mlil_operation(
                 first_mlil_loc,
             )
 
-        case int(MediumLevelILOperation.MLIL_CALL):
+        case MediumLevelILOperation.MLIL_CALL.value:
             propagate_mlil_call(
-                function_object,
+                function_node,
                 mlil_loc,
                 collected_locs,
                 var_to_trace,
@@ -1974,9 +2018,9 @@ def propagate_by_mlil_operation(
                 first_mlil_loc,
             )
 
-        case int(MediumLevelILOperation.MLIL_SET_VAR):
+        case MediumLevelILOperation.MLIL_SET_VAR.value:
             propagate_mlil_set_var(
-                function_object,
+                function_node,
                 mlil_loc,
                 vars_found,
                 already_iterated,
@@ -1987,9 +2031,9 @@ def propagate_by_mlil_operation(
                 first_mlil_loc,
             )
 
-        case int(MediumLevelILOperation.MLIL_SET_VAR_FIELD):
+        case MediumLevelILOperation.MLIL_SET_VAR_FIELD.value:
             propagate_mlil_set_var_field(
-                function_object,
+                function_node,
                 mlil_loc,
                 vars_found,
                 var_to_trace,
@@ -2001,7 +2045,7 @@ def propagate_by_mlil_operation(
 
         case _:
             propagate_mlil_unhandled_operation(
-                function_object,
+                function_node,
                 mlil_loc,
                 vars_found,
                 var_to_trace,
@@ -2014,7 +2058,7 @@ def propagate_by_mlil_operation(
 
 def trace_tainted_variable(
     analysis,
-    function_object: Function,
+    function_node: Function,
     mlil_loc: MediumLevelILInstruction,
     variable: Variable | TaintedGlobal | TaintedVar | TaintedStructMember,
     trace_type: SliceType,
@@ -2028,7 +2072,7 @@ def trace_tainted_variable(
 
     Args:
         analysis: The analysis object providing context and utilities for taint tracking.
-        function_object (Function): The Binary Ninja function object where the variable resides.
+        function_node (Function): The Binary Ninja function object where the variable resides.
         mlil_loc (MediumLevelILInstruction): The MLIL instruction where the tainted variable was initially found.
         variable (Variable): The Binary Ninja variable object to be traced.
         trace_type (SliceType): Indicates the direction of the trace (SliceType.Forward or SliceType.Backward).
@@ -2058,13 +2102,13 @@ def trace_tainted_variable(
 
         # extract use sites from var_to_trace
         variable_use_sites = extract_var_use_sites(
-            var_to_trace, function_object, analysis
+            var_to_trace, function_node, analysis
         )
 
         for ref in variable_use_sites:
-            instr_mlil = function_object.get_llil_at(ref.address).mlil
+            instr_mlil = function_node.get_llil_at(ref.address).mlil
             propagate_by_mlil_operation(
-                function_object,
+                function_node,
                 instr_mlil,
                 vars_found,
                 var_to_trace,
@@ -2104,13 +2148,13 @@ def find_param_by_name(func_obj: Function, param_name: str) -> Variable:
 
 
 def str_param_to_var_object(
-    function_object: Function, var_name: str, ssa_form: bool = False
+    function_node: Function, var_name: str, ssa_form: bool = False
 ):
     """
     Get the variable object for a parameter in a function based on a string variable name.
 
     Args:
-        function_object (Function): Binary Ninja function object.
+        function_node (Function): Binary Ninja function object.
         var_name (str): Name of the variable as a string.
         ssa_form (bool): Whether to return the SSA form of the variable.
 
@@ -2119,10 +2163,10 @@ def str_param_to_var_object(
     """
     if ssa_form:
         # Access the Medium Level IL (MLIL) SSA form of the function
-        mlil_ssa = function_object.mlil.ssa_form
+        mlil_ssa = function_node.mlil.ssa_form
         if mlil_ssa is None:
             raise ValueError(
-                f"SSA form is not available for function {function_object.name}"
+                f"SSA form is not available for function {function_node.name}"
             )
 
         # Iterate through SSA variables to find the matching one
@@ -2131,33 +2175,32 @@ def str_param_to_var_object(
                 return ssa_var
 
         raise ValueError(
-            f"SSA form of variable '{var_name}' not found in function {function_object.name}"
+            f"SSA form of variable '{var_name}' not found in function {function_node.name}"
         )
 
     else:
         # Access the regular parameters of the function
-        parameters = function_object.parameter_vars
+        parameters = function_node.parameter_vars
         for param in parameters:
             if param.name == var_name:
                 return param
 
         raise ValueError(
-            f"Parameter '{var_name}' not found in function {function_object.name}"
+            f"Parameter '{var_name}' not found in function {function_node.name}"
         )
 
 
 def str_to_var_object(
-    var_as_str: str | MediumLevelILVar, function_object: Function
-) -> Variable | None:
+    var_as_str: str | MediumLevelILVar, function_node: Function
+) -> Optional[Variable]:
     """
     Converts a variable name or MediumLevelILVar into a Binary Ninja Variable object.
-
     Searches the function's variable list for a match by name. If a MediumLevelILVar is passed,
     its `.name` is extracted and used for matching.
 
     Args:
         var_as_str (str | MediumLevelILVar): The variable name or MLIL variable to resolve.
-        function_object (Function): The Binary Ninja function containing the variable.
+        function_node (Function): The Binary Ninja function containing the variable.
 
     Returns:
         Variable | None: The matching Variable object, or None if not found.
@@ -2167,7 +2210,7 @@ def str_to_var_object(
     if isinstance(var_as_str, MediumLevelILVar):
         var_as_str = var_as_str.name
 
-    for var in function_object.vars:
+    for var in function_node.vars:
         if var.name == var_as_str:
             var_object = var
 
@@ -2187,22 +2230,16 @@ def get_func_param_from_call_param(bv, instr_mlil, var_to_trace):
         tuple: A tuple containing:
             - mapped (dict): A dictionary mapping each call argument (MLIL variable) to its corresponding function parameter (Variable object).
             - tainted_func_param (Variable or None): The function parameter that corresponds to the provided variable (`var_to_trace`). Returns None if no match is found.
-
-    Notes:
-        - This function assumes that the destination of the call (`instr_mlil.dest`) can be resolved to a function address.
-        - The function retrieves the `Function` object corresponding to the called function's address.
-        - It then maps each argument at the call site to the corresponding parameter of the called function.
-        - Finally, it checks if any of the call arguments match the `var_to_trace` and returns the corresponding function parameter.
     """
-    function_object = addr_to_func(bv, instr_mlil.dest.value.value)
-    if function_object:
+    function_node = addr_to_func(bv, instr_mlil.dest.value.value)
+    if function_node:
         call_params = [
             v.var if isinstance(v, (MediumLevelILVar, MediumLevelILVarSsa)) else None
             for v in instr_mlil.params
         ]
         function_params = [
-            v.var if isinstance(v, (MediumLevelILVar, MediumLevelILVarSsa)) else None
-            for v in function_object.parameter_vars
+            v if isinstance(v, (Variable, SSAVariable)) else None
+            for v in function_node.parameter_vars
         ]
         mapped = dict(zip(call_params, function_params))
         var_object = None
@@ -2230,16 +2267,16 @@ def get_func_param_from_call_param(bv, instr_mlil, var_to_trace):
 def get_use_sites(
     loc: MediumLevelILInstruction,
     var: Union[MediumLevelILVar, MediumLevelILVarSsa, SSAVariable, Variable],
-) -> Union[None, list]:
+) -> Optional[list]:
     """
     Retrieve the use sites of a specific variable within a given MLIL instruction.
 
     Args:
         loc (MediumLevelILInstruction): The MLIL instruction to inspect.
-        var (Union[SSAVariable, Variable]): The variable whose use sites are to be found.
+        var (Union[MediumLevelILVar, MediumLevelILVarSsa, SSAVariable, Variable]): The variable whose use sites are to be found.
 
     Returns:
-        list: The use sites of the variable if found in the instruction, otherwise None.
+        list | None: The use sites of the variable if found in the instruction, otherwise None.
     """
     vars = []
     if hasattr(loc, "vars_written"):
@@ -2273,7 +2310,9 @@ def tainted_param_in_model_sources(
         v.var if isinstance(v, (MediumLevelILVar, MediumLevelILVarSsa)) else None
         for v in loc.params
     ]
-    tainted_index = call_parameters.index(tainted_param.variable)
+    tainted_index = call_parameters.index(
+        tainted_param.variable if hasattr(tainted_param, "variable") else tainted_param
+    )
     if function_model.vararg_start_index:
         if tainted_index > function_model.vararg_start_index:
             return True
@@ -2282,3 +2321,25 @@ def tainted_param_in_model_sources(
         return True
 
     return False
+
+
+def get_ssa_variable(func, var: Union[SSAVariable, Variable, str]) -> SSAVariable:
+    """
+    Retrieves the SSA form of a given variable within a function.
+
+    Args:
+        func: The function object (e.g., Binary Ninja Function).
+        var (Variable): The variable to convert to SSA form.
+
+    Returns:
+        SSAVariable: The SSA form of the variable, or None if not found.
+    """
+    if isinstance(var, SSAVariable):
+        return var
+
+    if isinstance(var, Variable):
+        var = var.name
+
+    for ssa_var in func.mlil.ssa_form.vars:
+        if ssa_var.var.name == var:
+            return ssa_var.var

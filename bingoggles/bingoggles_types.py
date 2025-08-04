@@ -4,12 +4,10 @@ from binaryninja.function import Function
 from binaryninja.mediumlevelil import (
     SSAVariable,
     MediumLevelILInstruction,
-    MediumLevelILLoad,
     MediumLevelILConstPtr,
     MediumLevelILOperation,
 )
 from binaryninja.types import CoreSymbol
-from colorama import Fore
 import socket, os, hashlib, pathlib, rpyc, sys
 from rich.progress import Progress
 from rich.status import Status
@@ -95,7 +93,7 @@ class LoadStoreData:
         offset,
         addr_var: Union[Variable, SSAVariable],
         tainted_offset_var: Union[
-            "TaintedVar", "TaintedGlobal", "TaintedStructMember", "TaintedVarOffset"
+            "TaintedGlobal", "TaintedStructMember", "TaintedVarOffset", "TaintedVar"
         ],
         confidence_level: TaintConfidence,
         loc_address: int,
@@ -110,9 +108,7 @@ class LoadStoreData:
         display_offset = (
             hex(self.offset) if isinstance(self.offset, int) else self.offset
         )
-        return (
-            f"[{Fore.GREEN}LoadStoreData{Fore.RESET}]: {self.addr_var}:{display_offset}"
-        )
+        return f"[LoadStoreData]: {self.addr_var}:{display_offset}"
 
     def __eq__(self, other):
         if not isinstance(other, LoadStoreData):
@@ -195,11 +191,11 @@ class TaintedGlobal:
 
     def __repr__(self):
         if self.confidence_level == TaintConfidence.Tainted:
-            return f"{Fore.RESET}[{Fore.CYAN}{self.variable}{Fore.RESET}] -> [{Fore.LIGHTBLACK_EX}Tainted{Fore.RESET}]"
+            return f"[{self.variable}] -> [Tainted]"
         elif self.confidence_level == TaintConfidence.MaybeTainted:
-            return f"{Fore.RESET}[{Fore.CYAN}{self.variable}{Fore.RESET}] -> [{Fore.LIGHTMAGENTA_EX}Maybe Tainted{Fore.RESET}]"
+            return f"[{self.variable}] -> [Maybe Tainted]"
         elif self.confidence_level == TaintConfidence.NotTainted:
-            return f"{Fore.RESET}[{Fore.CYAN}{self.variable}{Fore.RESET}] -> [{Fore.LIGHTGREEN_EX}Not Tainted]{Fore.RESET}]"
+            return f"[{self.variable}] -> [Not Tainted]"
 
 
 @dataclass
@@ -243,11 +239,11 @@ class TaintedVar:
 
     def __repr__(self):
         if self.confidence_level == TaintConfidence.Tainted:
-            return f"[{Fore.CYAN}{self.variable}{Fore.RESET}] -> [{Fore.LIGHTBLACK_EX}Tainted{Fore.RESET}]"
+            return f"[{self.variable}] -> [Tainted]"
         elif self.confidence_level == TaintConfidence.MaybeTainted:
-            return f"[{Fore.CYAN}{self.variable}{Fore.RESET}] -> [{Fore.LIGHTMAGENTA_EX}Maybe Tainted{Fore.RESET}]"
+            return f"[{self.variable}] -> [Maybe Tainted]"
         elif self.confidence_level == TaintConfidence.NotTainted:
-            return f"[{Fore.CYAN}{self.variable}{Fore.RESET}] -> [{Fore.LIGHTGREEN_EX}Not Tainted]{Fore.RESET}]"
+            return f"[{self.variable}] -> [Not Tainted]"
 
 
 class SliceType:
@@ -345,52 +341,33 @@ class TaintedVarOffset:
             var_taint == TaintConfidence.Tainted
             and offset_var_taint == TaintConfidence.Tainted
         ):
-            taint_status = (
-                f"{Fore.LIGHTBLACK_EX}ReferenceVar + OffsetVar Tainted{Fore.RESET}"
-            )
+            taint_status = "ReferenceVar + OffsetVar Tainted"
         elif var_taint == TaintConfidence.Tainted:
-            taint_status = (
-                f"{Fore.LIGHTBLACK_EX}Byte(s) at reference Tainted{Fore.RESET}"
-            )
+            taint_status = "Byte(s) at reference Tainted"
         elif offset_var_taint == TaintConfidence.Tainted:
-            taint_status = f"{Fore.LIGHTBLACK_EX}OffsetVar Tainted{Fore.RESET}"
+            taint_status = "OffsetVar Tainted"
         elif (
             var_taint == TaintConfidence.MaybeTainted
             and offset_var_taint == TaintConfidence.MaybeTainted
         ):
-            taint_status = f"{Fore.LIGHTMAGENTA_EX}ReferenceVar + OffsetVar Maybe Tainted{Fore.RESET}"
+            taint_status = "ReferenceVar + OffsetVar Maybe Tainted"
         elif var_taint == TaintConfidence.MaybeTainted:
-            taint_status = (
-                f"{Fore.LIGHTMAGENTA_EX}Byte(s) at reference Maybe Tainted{Fore.RESET}"
-            )
+            taint_status = "Byte(s) at reference Maybe Tainted"
         elif offset_var_taint == TaintConfidence.MaybeTainted:
-            taint_status = f"{Fore.LIGHTMAGENTA_EX}OffsetVar Maybe Tainted{Fore.RESET}"
+            taint_status = "OffsetVar Maybe Tainted"
         else:
-            taint_status = f"{Fore.LIGHTGREEN_EX}Not Tainted{Fore.RESET}"
+            taint_status = "Not Tainted"
 
-        is_load = isinstance(
-            self.function.get_llil_at(self.loc_address).mlil.src, MediumLevelILLoad
-        )
+        parts = [f"&{self.variable}"]
 
-        if self.offset_var is None:
-            # Case: simple var + constant offset
-            return (
-                f"[&{Fore.CYAN}{self.variable}{Fore.RESET} + {Fore.CYAN}{self.offset:#0x}{Fore.RESET}] -> "
-                f"[{taint_status}]"
-            )
+        if self.offset is not None:
+            parts.append(f"+ {self.offset:#0x}")
+        elif self.offset_var is not None:
+            parts.append(f"+ {getattr(self.offset_var, 'variable', self.offset_var)}")
 
-        if is_load:
-            return (
-                f"[&{Fore.CYAN}{self.variable}{Fore.RESET} + "
-                f"{Fore.CYAN}{self.offset_var.variable}{Fore.RESET}] -> "
-                f"[{taint_status}]"
-            )
-        else:
-            return (
-                f"[&{Fore.CYAN}{self.variable}{Fore.RESET}:{Fore.CYAN}{self.offset:#0x}{Fore.RESET} + "
-                f"{Fore.CYAN}{self.offset_var.variable}{Fore.RESET}] -> "
-                f"[{taint_status}]"
-            )
+        addr_str = " ".join(parts)
+
+        return f"[{addr_str}] -> [{taint_status}]"
 
 
 class BGInit:
@@ -448,14 +425,12 @@ class BGInit:
         for lib in self.libraries:
             cache_file = self._get_cache_filename(lib)
             if os.path.exists(cache_file):
-                print(
-                    f"[{Fore.CYAN}INFO{Fore.RESET}] Loading analysis from cache for {lib}"
-                )
+                print(f"[INFO] Loading analysis from cache for {lib}")
                 lib_bv = bv.load(os.path.abspath(cache_file))
                 mapped[lib] = lib_bv
 
             else:
-                print(f"[{Fore.CYAN}INFO{Fore.RESET}] Analyzing and caching {lib}")
+                print(f"[INFO] Analyzing and caching {lib}")
                 lib_bv = bv.load(lib)
                 if lib_bv:
                     lib_bv.create_database(os.path.abspath(cache_file))
@@ -585,21 +560,21 @@ class TaintedStructMember:
     def __repr__(self):
         if self.confidence_level == TaintConfidence.Tainted:
             return (
-                f"[{Fore.CYAN}{self.hlil_var}{Fore.RESET}]"
+                f"[{self.hlil_var}]"
                 f"->{self.member} @ {self.loc_address:#0x} "
-                f"[{Fore.LIGHTBLACK_EX}Tainted{Fore.RESET}]"
+                f"[Tainted]"
             )
         elif self.confidence_level == TaintConfidence.MaybeTainted:
             return (
-                f"[{Fore.CYAN}{self.hlil_var}{Fore.RESET}]"
+                f"[{self.hlil_var}]"
                 f" -> {self.member} @ {self.loc_address:#0x} "
-                f"[{Fore.LIGHTMAGENTA_EX}Maybe Tainted{Fore.RESET}]"
+                f"[Maybe Tainted]"
             )
         elif self.confidence_level == TaintConfidence.NotTainted:
             return (
-                f"[{Fore.CYAN}{self.hlil_var}{Fore.RESET}]"
+                f"[{self.hlil_var}]"
                 f" -> {self.member} @ {self.loc_address:#0x} "
-                f"[{Fore.LIGHTGREEN_EX}Not Tainted{Fore.RESET}]"
+                f"[Not Tainted]"
             )
 
 
@@ -626,7 +601,7 @@ class TaintTarget:
         )
 
     def __repr__(self):
-        return f"[{Fore.LIGHTBLUE_EX}TaintTarget{Fore.RESET}] -> {self.variable} @ {self.loc_address}"
+        return f"[TaintTarget] -> {self.variable} @ {self.loc_address}"
 
 
 @dataclass
@@ -635,7 +610,7 @@ class InterprocTaintResult:
         self,
         tainted_param_names: set,
         tainted_param_map: dict,
-        original_tainted_variables: Union[list[TaintedVar], TaintedVar],
+        original_tainted_variables: Union[List[TaintedVar], TaintedVar],
         is_return_tainted: bool,
         target_function_params: List[Variable],
     ):
@@ -658,14 +633,15 @@ class InterprocTaintResult:
 
     def __repr__(self):
         return (
-            f"{Fore.MAGENTA}Tainted Parameter Names:{Fore.RESET} {self.tainted_param_names}\n"
-            f"{Fore.CYAN}Original Tainted Variables:{Fore.RESET} {self.original_tainted_variables}\n"
-            f"{Fore.YELLOW}Is Return Tainted:{Fore.RESET} {self.is_return_tainted}\n"
-            f"{Fore.GREEN}Tainted Parameter Map:{Fore.RESET} {self.tainted_param_map}\n"
-            f"{Fore.BLUE}Target Function Parameters:{Fore.RESET} {self.target_function_params}"
+            f"Tainted Parameter Names: {self.tainted_param_names}\n"
+            f"Original Tainted Variables: {self.original_tainted_variables}\n"
+            f"Is Return Tainted: {self.is_return_tainted}\n"
+            f"Tainted Parameter Map: {self.tainted_param_map}\n"
+            f"Target Function Parameters: {self.target_function_params}"
         )
 
 
+@dataclass
 class TaintedLOC:
     """
     Represents a single tainted instruction in the variable flow analysis.
@@ -678,11 +654,13 @@ class TaintedLOC:
     Attributes:
         loc (MediumLevelILInstruction): The MLIL instruction involved in the tainted operation.
         addr (int): The address of the instruction in the binary.
-        target_var (Union[TaintedVar, TaintedVarOffset, TaintedGlobal, TaintedStructMember]):
+        target_var (Union[
+            TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
+        ]):
             The variable being tracked as tainted at this instruction.
         propagated_var (Variable | None): The variable from which the taint originated, if applicable.
         taint_confidence (TaintConfidence): The confidence level (Tainted, MaybeTainted, NotTainted).
-        function_object (Function): The Binary Ninja function object this instruction belongs to.
+        function_node (Function): The Binary Ninja function object this instruction belongs to.
     """
 
     def __init__(
@@ -690,24 +668,24 @@ class TaintedLOC:
         loc: MediumLevelILInstruction,  # Line of code
         addr: int,  # Address of the LOC
         target_var: Union[
-            TaintedVar, TaintedVarOffset, TaintedGlobal, TaintedStructMember
+            TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
         ],  # Target variable that we found this LOC with, (the variable we're tracking)
         propagated_var: Union[
             Variable | None
         ],  # Variable where target_var gets its data from (connected variable)
         taint_confidence: TaintConfidence,  # Confidence level of the LOC being tainted
-        function_object: Function,  # Binary ninja function object
+        function_node: Function,  # Binary ninja function object
     ):
         self.loc = loc
         self.target_var = target_var
         self.propagated_var = propagated_var
         self.taint_confidence = taint_confidence
         self.addr = addr
-        self.function_object = function_object
+        self.function_node = function_node
 
     def __repr__(self):
-        if int(self.loc.operation) == int(MediumLevelILOperation.MLIL_CALL):
-            function = self.function_object.view.get_function_at(
+        if self.loc.operation.value == MediumLevelILOperation.MLIL_CALL.value:
+            function = self.function_node.view.get_function_at(
                 self.loc.dest.value.value
             )
             function_name = (
@@ -718,17 +696,16 @@ class TaintedLOC:
             loc_str = loc_str.replace(f"{self.loc.dest.value.value:#0x}", function_name)
 
             if self.taint_confidence == TaintConfidence.Tainted:
-                return f"[{self.addr:#0x}] {Fore.CYAN}{loc_str}{Fore.RESET} -> {Fore.MAGENTA}{self.target_var.variable}{Fore.RESET} -> {Fore.RED}{self.propagated_var}{Fore.RESET} [{Fore.LIGHTBLACK_EX}Tainted{Fore.RESET}]"
+                return f"[{self.addr:#0x}] {loc_str} -> {self.target_var.variable} -> {self.propagated_var} [Tainted]"
 
             elif self.taint_confidence == TaintConfidence.MaybeTainted:
-                return f"[{self.addr:#0x}] {Fore.CYAN}{loc_str}{Fore.RESET} -> {Fore.MAGENTA}{self.target_var.variable}{Fore.RESET} -> {Fore.RED}{self.propagated_var}{Fore.RESET} [{Fore.YELLOW}MaybeTainted{Fore.RESET}]"
-
+                return f"[{self.addr:#0x}] {loc_str} -> {self.target_var.variable} -> {self.propagated_var} [MaybeTainted]"
         else:
             if self.taint_confidence == TaintConfidence.Tainted:
-                return f"[{self.addr:#0x}] {Fore.CYAN}{self.loc}{Fore.RESET} -> {Fore.MAGENTA}{self.target_var.variable}{Fore.RESET} -> {Fore.RED}{self.propagated_var}{Fore.RESET} [{Fore.LIGHTBLACK_EX}Tainted{Fore.RESET}]"
+                return f"[{self.addr:#0x}] {self.loc} -> {self.target_var.variable} -> {self.propagated_var} [Tainted]"
 
             elif self.taint_confidence == TaintConfidence.MaybeTainted:
-                return f"[{self.addr:#0x}] {Fore.CYAN}{self.loc}{Fore.RESET} -> {Fore.MAGENTA}{self.target_var.variable}{Fore.RESET} -> {Fore.RED}{self.propagated_var}{Fore.RESET} [{Fore.YELLOW}MaybeTainted{Fore.RESET}]"
+                return f"[{self.addr:#0x}] {self.loc} -> {self.target_var.variable} -> {self.propagated_var} [MaybeTainted]"
 
 
 @dataclass
@@ -751,12 +728,25 @@ class VulnReport:
         return f"VulnReport(vulnerable_path_data={self.vulnerable_path_data})"
 
 
+@dataclass
 class FunctionModel:
+    """
+    Represents a model of a function for taint analysis.
+
+    Attributes:
+        name (str): The function's name.
+        taint_sources (List[int]): Indices of parameters that are taint sources.
+        taint_destinations (List[int]): Indices of parameters that are taint sinks/destinations.
+        taints_return (bool): Whether the function's return value is tainted by any input.
+        taints_varargs (bool): Whether the function taints variable arguments.
+        vararg_start_index (int|None): Index where varargs start, if applicable.
+    """
+
     def __init__(
         self,
         name: str,
-        taint_sources: list[int],
-        taint_destinations: list[int],
+        taint_sources: List[int],
+        taint_destinations: List[int],
         taints_return: bool,
         taints_varargs: bool = False,
         vararg_start_index: Union[int, None] = None,
@@ -780,6 +770,16 @@ class FunctionModel:
 
 
 class TraceDecision(Enum):
+    """
+    Enum for decisions made during taint tracing.
+
+    Values:
+        SKIP_AND_DISCARD: Skip instruction, don't trace variable.
+        SKIP_AND_PROCESS: Skip instruction, still trace variable.
+        PROCESS_AND_DISCARD: Don't skip instruction, but discard variable (rare).
+        PROCESS_AND_TRACE: Normal tracing.
+    """
+
     SKIP_AND_DISCARD = auto()  # Skip instruction, don't trace variable
     SKIP_AND_PROCESS = auto()  # Skip instruction, still trace variable
     PROCESS_AND_DISCARD = auto()  # Don't skip instruction, but discard variable (rare)

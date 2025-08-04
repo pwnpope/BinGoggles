@@ -1,5 +1,5 @@
 from .bingoggles_types import FunctionModel
-from typing import Union
+from typing import Union, Optional
 from binaryninja import Function, MediumLevelILInstruction, SymbolType
 from functools import cache
 
@@ -53,14 +53,41 @@ modeled_functions = [
     FunctionModel("sprintf", [], [0], True, True, 2),
     FunctionModel("vsprintf", [], [0], True, True, 2),
     FunctionModel("swscanf", [0], [2], False, True, 2),
-    # we're adding functions here that dont taint anything, we dont want to do any analysis on them.
+    # We add functions here under this comment that we do not want to preform any analysis on as it would be pointless for variable path data.
+    # We will check this by doing something like: if not function_model.taints_return and not function_model.taint_destinations: no_analysis()
     FunctionModel("printf", [], [], False, False, 1),
+    FunctionModel("puts", [], [], False, False, 1),
+    FunctionModel("putchar", [], [], False, False, 1),
+    FunctionModel("putc", [], [], False, False, 1),
+    FunctionModel("fputs", [], [], False, False, 2),
+    FunctionModel("fputc", [], [], False, False, 2),
+    FunctionModel("perror", [], [], False, False, 1),
+    FunctionModel("exit", [], [], False, False, 1),
+    FunctionModel("abort", [], [], False, False, 1),
+    FunctionModel("remove", [], [], False, False, 1),
+    FunctionModel("unlink", [], [], False, False, 1),
+    FunctionModel("system", [], [], False, False, 1),
+    FunctionModel("sleep", [], [], False, False, 1),
+    FunctionModel("usleep", [], [], False, False, 1),
+    FunctionModel("raise", [], [], False, False, 1),
+    FunctionModel("signal", [], [], False, False, 2),
+    FunctionModel("alarm", [], [], False, False, 1),
+    FunctionModel("time", [], [], False, False, 1),
+    FunctionModel("clock", [], [], False, False, 1),
+    FunctionModel("getpid", [], [], False, False, 1),
+    FunctionModel("getppid", [], [], False, False, 1),
+    FunctionModel("getuid", [], [], False, False, 1),
+    FunctionModel("geteuid", [], [], False, False, 1),
+    FunctionModel("getgid", [], [], False, False, 1),
+    FunctionModel("getegid", [], [], False, False, 1),
 ]
 
+# we're adding functions here that dont taint anything, we dont want to do any analysis on them.
 modeled_functions_names = [i.name for i in modeled_functions]
 
 
-def get_modeled_function_index(name: str) -> int | None:
+@cache
+def get_modeled_function_index(name: str) -> Optional[int]:
     """
     Retrieve the index of a modeled function by its name.
 
@@ -96,7 +123,7 @@ def normalize_func_name(name: str) -> str:
         "_imp__",  # Windows import thunks (e.g., _imp__printf)
         "__isoc99_",  # ISO C99 specifics
         "_IO_",  # Standard I/O library internals (e.g., _IO_getc)
-        "__new_",  # Related to new operator
+        "__new_",
         "__",  # Double underscore (general compiler/internal)
         "_",  # Single underscore (general, often for internal or static)
     ]
@@ -106,7 +133,8 @@ def normalize_func_name(name: str) -> str:
     return name
 
 
-def get_function_model(name: str) -> Union[FunctionModel, None]:
+@cache
+def get_function_model(name: str) -> Optional[FunctionModel]:
     """
     Retrieve a taint model for a given libc-style function name.
 
@@ -129,8 +157,8 @@ def get_function_model(name: str) -> Union[FunctionModel, None]:
 
 @cache
 def get_modeled_function_name_at_callsite(
-    function_object: Function, mlil_loc: MediumLevelILInstruction
-) -> Union[str, None]:
+    function_node: Function, mlil_loc: MediumLevelILInstruction
+) -> Optional[str]:
     """
     Given an MLIL call instruction, return the normalized name of the called function
     if it matches one of the known modeled functions.
@@ -140,27 +168,32 @@ def get_modeled_function_name_at_callsite(
     list of modeled functions. If so, the normalized name is returned.
 
     Args:
-        function_object (Function): The Binary Ninja Function object containing the MLIL instruction.
+        function_node (Function): The Binary Ninja Function object containing the MLIL instruction.
         mlil_loc (MediumLevelILInstruction): The MLIL call instruction where the function is invoked.
 
     Returns:
         str | None: The normalized name of the matched modeled function, or None if no match is found.
     """
-    bv = function_object.view
+    bv = function_node.view
     function = bv.get_function_at(mlil_loc.dest.value.value)
     function_name = None
     if function:
         function_name = function.name
         normalized_name = normalize_func_name(function_name)
-        if normalized_name in [func.name for func in modeled_functions]:
+        modeled_functions_name_set = set(modeled_functions_names)
+        if normalized_name in modeled_functions_name_set:
             return normalized_name
 
-    start = bv.get_section_by_name(".synthetic_builtins").start
-    end = bv.get_section_by_name(".synthetic_builtins").end
+    section = bv.get_section_by_name(".synthetic_builtins")
+    if section is None:
+        return None
+
+    start = section.start
+    end = section.end
     symbol = bv.get_symbol_at(mlil_loc.dest.value.value)
+
     if symbol and symbol.type.value == SymbolType.SymbolicFunctionSymbol.value:
         function_name = bv.get_symbol_at(mlil_loc.dest.value.value).name
-
         for addr in range(start, end, 8):
             builtin_function = bv.get_symbol_at(addr)
             if builtin_function and builtin_function.name == function_name:

@@ -10,7 +10,6 @@ from binaryninja import Function
 from binaryninja.enums import SymbolType
 from functools import cache
 from colorama import Fore
-
 from .bingoggles_types import *
 from .auxiliary import *
 from binaryninja.enums import MediumLevelILOperation
@@ -20,16 +19,17 @@ from collections import OrderedDict
 from typing import List, Union
 from .function_registry import get_modeled_function_index, modeled_functions
 from tqdm import tqdm
+from .bingoggles_output import *
 
 
 class InterprocHelper:
     def __init__(
         self,
         binary_view: BinaryView,
-        original_tainted_param: Union[str, list],
+        original_tainted_params: tuple,
         origin_function: Function,
         tainted_param_map: set,
-        analysis,
+        analysis: "Analysis",
     ) -> None:
         """
         Helper class for interprocedural taint analysis and variable tracking.
@@ -39,18 +39,26 @@ class InterprocHelper:
 
         Args:
             binary_view (BinaryView): The Binary Ninja BinaryView object.
-            original_tainted_param (str | list): The original tainted parameter(s).
+            original_tainted_params (tuple): The original tainted parameter(s).
             origin_function (Function): The function where taint originated.
             tainted_param_map (set): Set of tainted parameter mappings.
             analysis (Analysis): The main analysis object coordinating taint analysis.
         """
-        self.binary_view = binary_view
+        self.bv = binary_view
         self.recursion_limit = 8
         self.sub_functions_analyzed = 0
         self.origin_function = origin_function
-        self.original_tainted_param = original_tainted_param
+        self.original_tainted_params = original_tainted_params
         self.tainted_param_map = tainted_param_map
         self.analysis: "Analysis" = analysis
+
+    def does_variable_taint_param(
+        original_tainted_params: tuple,
+        variable: Union[Variable, SSAVariable],
+        var_mapping: dict,
+    ) -> bool: ...
+
+    #:TODO
 
     def handle_mlil_store_ssa(self, loc, tainted_variables: set) -> None:
         """
@@ -70,14 +78,13 @@ class InterprocHelper:
         )
 
     def gather_mlil_call_data(
-        self, loc, binary_view: BinaryView, tainted_variables: set
-    ):
+        self, loc, tainted_variables: set
+    ) -> Union[None, CallData]:
         """
         Gather information about an MLIL call instruction, including tainted parameters.
 
         Args:
             loc: The MLIL call instruction.
-            binary_view (BinaryView): The Binary Ninja BinaryView object.
             tainted_variables (set): Set of currently tainted variables.
 
         Returns:
@@ -89,7 +96,7 @@ class InterprocHelper:
         ]
 
         call_object = addr_to_func(
-            binary_view,
+            self.bv,
             loc.dest.value.value,
         )
 
@@ -112,8 +119,8 @@ class InterprocHelper:
         )
 
     def gather_interproc_data(
-        self, mlil_loc, function_node, analysis, call_data: CallData
-    ) -> Union[InterprocTaintResult, FunctionModel, None]:
+        self, mlil_loc, function_node, analysis: "Analysis", call_data: CallData
+    ) -> Union[list, None]:
         """
         Gather interprocedural taint data for a function call.
 
@@ -124,53 +131,58 @@ class InterprocHelper:
             call_data (CallData): Data about the call site.
 
         Returns:
-            Union[InterprocTaintResult, FunctionModel, None]: The result of the interprocedural taint analysis.
+            Union[list, None]: The results of the interprocedural taint analysis.
         """
+        interproc_results_list = []
         imported_function = analysis.resolve_function_type(mlil_loc)
         interproc_results = None
         normalized_function_name = get_modeled_function_name_at_callsite(
             function_node, mlil_loc
         )
-        _, tainted_func_param = get_func_param_from_call_param(
-            analysis.bv, mlil_loc, self.original_tainted_param
-        )
 
-        if normalized_function_name:
-            interproc_results = analysis.analyze_function_taint(
-                normalized_function_name, tainted_func_param, mlil_loc
-            )
-            self.sub_functions_analyzed += 1
-
-        elif imported_function:
-            interproc_results = analysis.analyze_function_taint(
-                imported_function, self.original_tainted_param, mlil_loc
-            )
-            self.sub_functions_analyzed += 1
-
-        elif not normalized_function_name and not imported_function:
-            resolved_function_object = resolve_got_callsite(
-                function_node.view, mlil_loc.dest.value.value
+        for param in self.original_tainted_params:
+            _, tainted_func_param = get_func_param_from_call_param(
+                analysis.bv, mlil_loc, param
             )
 
-            if resolved_function_object:
+            if normalized_function_name:
                 interproc_results = analysis.analyze_function_taint(
-                    resolved_function_object.name, self.original_tainted_param, mlil_loc
+                    normalized_function_name, tainted_func_param, mlil_loc
+                )
+                self.sub_functions_analyzed += 1
+
+            elif imported_function:
+                #:TODO work on this
+                # interproc_results = analysis.trace_function_taint(
+                #     function_node: Union[int, Function],
+                #     tainted_params: Union[tuple, Variable, str],
+                #     binary_view: BinaryView,
+                # )
+                self.sub_functions_analyzed += 1
+
+            elif not normalized_function_name and not imported_function:
+                resolved_function_object = resolve_got_callsite(
+                    function_node.view, mlil_loc.dest.value.value
                 )
 
-            else:
-                if self.recursion_limit < self.sub_functions_analyzed:
+                if resolved_function_object:
+                    interproc_results = analysis.analyze_function_taint(
+                        resolved_function_object.name, param, mlil_loc
+                    )
+
+                else:
+                    # if self.recursion_limit < self.sub_functions_analyzed:
                     interproc_results = analysis.trace_function_taint(
                         function_node=call_data.call_object,
-                        tainted_params=call_data.tainted_sub_params,
-                        binary_view=self.binary_view,
-                        origin_function=self.origin_function,
-                        original_tainted_param=self.original_tainted_param,
-                        tainted_param_map=call_data.tainted_param_map,
+                        tainted_params=tuple(call_data.tainted_sub_params),
+                        binary_view=self.bv,
                     )
 
                     self.sub_functions_analyzed += 1
 
-        return interproc_results
+            interproc_results_list.append(interproc_results)
+
+        return interproc_results_list
 
     def handle_mlil_call_ssa(
         self,
@@ -193,9 +205,8 @@ class InterprocHelper:
         Returns:
             None
         """
-        call_data = self.gather_mlil_call_data(loc, self.binary_view, tainted_variables)
-
-        if not call_data.call_object:
+        call_data = self.gather_mlil_call_data(loc, tainted_variables)
+        if call_data and not call_data.call_object:
             return
 
         if verbose:
@@ -203,39 +214,49 @@ class InterprocHelper:
                 f"[{Fore.GREEN}INFO{Fore.RESET}] Analyzing sub-function call: {call_data.call_object} for tainted parameters"
             )
 
-        ipc_data = self.gather_interproc_data(loc, function_node, analysis, call_data)
+        list_ipc_data = self.gather_interproc_data(
+            loc, function_node, analysis, call_data
+        )
 
-        if ipc_data and isinstance(ipc_data, InterprocTaintResult):
-            # Map back the tainted sub-function parameters to the current function's variables
-            tainted_sub_variables = [
-                param[0].ssa_form.var
-                for param in call_data.zipped_params
-                if param[1].name in ipc_data.tainted_param_names
-            ]
+        for ipc_data in list_ipc_data:
+            if ipc_data and isinstance(ipc_data, InterprocTaintResult):
+                # Map back the tainted sub-function parameters to the current function's variables
+                tainted_sub_variables = [
+                    param[0].ssa_form.var
+                    for param in call_data.zipped_params
+                    if param[1].name in ipc_data.tainted_param_names
+                ]
 
-            for sub_var in tainted_sub_variables:
-                append_bingoggles_var_by_type(sub_var, tainted_variables, loc, analysis)
+                for sub_var in tainted_sub_variables:
+                    append_bingoggles_var_by_type(
+                        sub_var, tainted_variables, loc, analysis
+                    )
 
-            if ipc_data.is_return_tainted:
-                if loc.vars_written:
-                    var = loc.vars_written[0]
-                    append_bingoggles_var_by_type(var, tainted_variables, loc, analysis)
+                if ipc_data.is_return_tainted:
+                    if loc.vars_written:
+                        var = loc.vars_written[0]
+                        append_bingoggles_var_by_type(
+                            var, tainted_variables, loc, analysis
+                        )
 
-        elif ipc_data and isinstance(ipc_data, FunctionModel):
-            #:TODO does this work
-            tainted_sub_variables = [
-                call_data.zipped_params[i][0].ssa_form.var
-                for i in ipc_data.taint_destinations
-                if i < len(call_data.zipped_params)
-            ]
+            elif ipc_data and isinstance(ipc_data, FunctionModel):
+                tainted_sub_variables = [
+                    call_data.zipped_params[i][0].ssa_form.var
+                    for i in ipc_data.taint_destinations
+                    if i < len(call_data.zipped_params)
+                ]
 
-            for sub_var in tainted_sub_variables:
-                append_bingoggles_var_by_type(sub_var, tainted_variables, loc, analysis)
+                for sub_var in tainted_sub_variables:
+                    append_bingoggles_var_by_type(
+                        sub_var, tainted_variables, loc, analysis
+                    )
 
-            if ipc_data.taints_return:
-                if loc.vars_written:
-                    var = loc.vars_written[0]
-                    append_bingoggles_var_by_type(var, tainted_variables, loc, analysis)
+                if ipc_data.taints_return:
+                    if loc.vars_written:
+                        var = loc.vars_written[0]
+                        append_bingoggles_var_by_type(
+                            var, tainted_variables, loc, analysis
+                        )
 
     def mlil_handler(
         self, analysis, loc, tainted_variables: set, function_node: Function, verbose
@@ -299,7 +320,7 @@ class InterprocHelper:
         function_node: Function,
         tainted_variables: set,
         variable_mapping: dict,
-        verbose: bool,
+        verbose: bool = False,
     ) -> None:
         """
         Trace taint propagation through all MLIL instructions in a function node.
@@ -321,24 +342,26 @@ class InterprocHelper:
             loc = mlil_loc.ssa_form
             self.mlil_handler(analysis, loc, tainted_variables, function_node, verbose)
 
-        # Map variables written to the variables read in the current instruction
-        for var_assignment in loc.vars_written:
-            variable_mapping[var_assignment] = loc.vars_read
+            # Map variables written to the variables read in the current instruction
+            for var_assignment in loc.vars_written:
+                variable_mapping[var_assignment] = loc.vars_read
 
-        # If any read variable is tainted, mark the written variables as tainted
-        if any(
-            any(tv.variable == read_var for tv in tainted_variables)
-            for read_var in loc.vars_read
-        ):
-            if loc.vars_written:
-                var = loc.vars_written[0]
-                append_bingoggles_var_by_type(var, tainted_variables, loc, self)
+            # If any read variable is tainted, mark the written variables as tainted
+            if any(
+                any(tv.variable == read_var for tv in tainted_variables)
+                for read_var in loc.vars_read
+            ):
+                if loc.vars_written:
+                    var = loc.vars_written[0]
+                    append_bingoggles_var_by_type(
+                        var, tainted_variables, loc, self.analysis
+                    )
 
-    def print_banner(
+    def print_banner_interproc_banner(
         self,
         verbose: bool,
         trace_function_taint_printed: bool,
-        tainted_param: Tuple[Union[Variable, str, Tuple[Variable]]],
+        tainted_params: List,
         function_node: Function,
     ) -> None:
         """
@@ -347,7 +370,7 @@ class InterprocHelper:
         Args:
             verbose (bool): Whether to print verbose output.
             trace_function_taint_printed (bool): Whether the banner has already been printed.
-            tainted_param (tuple): The tainted parameter(s) being traced.
+            tainted_params (list): The tainted parameter(s) being traced.
             function_node (Function): The function node being analyzed.
 
         Returns:
@@ -356,39 +379,9 @@ class InterprocHelper:
         if verbose and not trace_function_taint_printed:
             print(
                 f"tainted_param: Variable | str {Fore.RESET})\n-> {Fore.LIGHTBLUE_EX}{function_node}"
-                f"{Fore.RESET}:{Fore.BLUE}{tainted_param}{Fore.RESET}\n{Fore.GREEN}{'='*113}{Fore.RESET}"
+                f"{Fore.RESET}:{Fore.BLUE}{tainted_params}{Fore.RESET}\n{Fore.GREEN}{'='*113}{Fore.RESET}"
             )
             trace_function_taint_printed = True
-
-    def trace_init(
-        self,
-        function_node: Union[int, Function],
-        tainted_param: Union[Variable, str],
-        original_tainted_param: Union[Variable, str],
-        bv: BinaryView,
-        tainted_param_map: dict = None,
-    ) -> None:
-        """
-        Initializes parameters for a taint trace.
-
-        Args:
-            function_node: The current function being analyzed.
-            tainted_param: Current parameters considered tainted.
-            original_tainted_param: Initial set of tainted parameters for the trace.
-            bv: The BinaryView object for analysis.
-            tainted_param_map: Optional dictionary for tracking tainted parameters.
-        """
-        if original_tainted_param is None:
-            original_tainted_param = tainted_param
-
-        if tainted_param_map is None:
-            tainted_param_map = {}
-
-        if bv is None:
-            bv = bv
-
-        if not isinstance(tainted_param, list):
-            tainted_param = [self.get_ssa_variable(function_node, tainted_param)]
 
     def walk_variable(self, var_mapping: dict, key_names: set) -> set:
         """
@@ -408,7 +401,6 @@ class InterprocHelper:
 
         for var_name in key_names:
             if var_name in var_mapping:
-                # print("adding var to new variables: ", var_name)
                 new_variables.update(var_mapping[var_name])
 
             else:
@@ -418,97 +410,55 @@ class InterprocHelper:
 
     def convert_str_params_to_var(
         self,
-        tainted_param: Union[Variable, SSAVariable, str],
+        tainted_params: list,
         function_node: Function,
         tainted_variables: set,
-        analysis: "Analysis",
     ) -> None:
         """
-        Convert string parameter names to Variable objects in SSA form and add them to the tainted set.
+        Converts string parameter names, Variables, or SSAVariables to SSA Variable objects and adds them to the tainted set.
+
+        This method processes each entry in `tainted_params`, resolving string names to SSA Variable objects
+        within the given function. The resolved variables are then wrapped and added to the `tainted_variables` set
+        for taint analysis.
 
         Args:
-            tainted_param (Variable | SSAVariable | str): The parameter to convert.
-            function_node (Function): The function node containing the parameter.
-            tainted_variables (set): Set of currently tainted variables.
-            analysis (Analysis): The Analysis object.
+            tainted_params (Union[List, Variable, SSAVariable, str]):
+                The parameters to convert, which may be a list or a single Variable, SSAVariable, or string name.
+            function_node (Function): The Binary Ninja function object containing the parameters.
+            tainted_variables (set): The set to which resolved tainted variables will be added.
 
         Returns:
             None
         """
-        if isinstance(tainted_param, str):
-            var_obj = str_param_to_var_object(
-                function_node, tainted_param, ssa_form=True
-            )
-            if var_obj:
-                first_var_use = analysis.find_first_var_use(function_node, var_obj)
+        for param in tainted_params:
+            if isinstance(param, str):
+                var_obj = str_param_to_var_object(function_node, param, ssa_form=True)
+                if var_obj:
+                    first_var_use = self.analysis.find_first_var_use(
+                        function_node, var_obj
+                    )
+
+                    if first_var_use:
+                        mlil_loc = function_node.get_llil_at(first_var_use).mlil
+                        append_bingoggles_var_by_type(
+                            var_obj,
+                            tainted_variables,
+                            mlil_loc,
+                            self.analysis,
+                        )
+
+            elif isinstance(param, (Variable, SSAVariable)):
+                first_var_use = self.analysis.find_first_var_use(function_node, param)
 
                 if first_var_use:
                     mlil_loc = function_node.get_llil_at(first_var_use).mlil
+
                     append_bingoggles_var_by_type(
-                        var_obj,
+                        param,
                         tainted_variables,
                         mlil_loc,
-                        first_var_use,
-                        analysis,
+                        self.analysis,
                     )
-
-        elif isinstance(tainted_param, (Variable, SSAVariable)):
-            first_var_use = analysis.find_first_var_use(function_node, tainted_param)
-
-            if first_var_use:
-                mlil_loc = function_node.get_llil_at(first_var_use).mlil
-
-                append_bingoggles_var_by_type(
-                    tainted_param,
-                    tainted_variables,
-                    mlil_loc,
-                    first_var_use,
-                    analysis,
-                )
-
-    def get_ssa_variable(self, func, var: Variable) -> SSAVariable:
-        """
-        Retrieves the SSA form of a given variable within a function.
-
-        Args:
-            func: The function object (e.g., Binary Ninja Function).
-            var (Variable): The variable to convert to SSA form.
-
-        Returns:
-            SSAVariable: The SSA form of the variable, or None if not found.
-        """
-        if isinstance(var, SSAVariable):
-            return var
-
-        for ssa_var in func.mlil.ssa_form.vars:
-            if ssa_var.var == var:
-                return ssa_var
-
-    def convert_function_node_to_function_object(self, bv, function_node) -> Function:
-        """
-        Converts a function address (int) to a Function object.
-
-        Args:
-            bv: The BinaryView object.
-            function_node (int | Function): The function's address as an integer or an existing Function object.
-
-        Returns:
-            Function: The corresponding Function object.
-
-        Raises:
-            ValueError: If the function cannot be found from the provided address.
-        """
-        if isinstance(function_node, int):
-            addr = function_node
-            function_node = addr_to_func(bv, function_node)
-            if function_node is None:
-                raise ValueError(
-                    f"[{Fore.RED}ERROR{Fore.RESET}]Could not find target function from address @ {addr:#0x}"
-                )
-
-            return function_node
-
-        return function_node
 
 
 class VargFunctionCallResolver:
@@ -557,7 +507,7 @@ class VargFunctionCallResolver:
     def resolve_and_patch(
         self,
         resolved: List[FunctionModel],
-        function_object: Function,
+        function_node: Function,
         mlil_loc: MediumLevelILInstruction,
     ) -> Union[FunctionModel, None]:
         """
@@ -565,32 +515,32 @@ class VargFunctionCallResolver:
 
         Args:
             resolved (List[FunctionModel]): A list of already resolved function models to avoid duplicates.
-            function_object (Function): The Binary Ninja function object containing the call.
+            function_node (Function): The Binary Ninja function object containing the call.
             mlil_loc (MediumLevelILInstruction): The MLIL instruction representing the function call.
 
         Returns:
             FunctionModel or None: The resolved function model if a new one was found and patched, otherwise None.
         """
-        section = self.bv.get_sections_at(function_object.start)
+        section = self.bv.get_sections_at(function_node.start)
         if section:
             name = section[0].name
             if name == ".synthetic_builtins":
                 return None
 
-        model = resolve_modeled_variadic_function(function_object, mlil_loc)
+        model = resolve_modeled_variadic_function(function_node, mlil_loc)
         if model and model not in resolved:
-            patch_function_params(function_object, mlil_loc, model)
+            patch_function_params(function_node, mlil_loc, model)
             resolved.append(model)
             return model
 
         return None
 
-    def is_in_text_section(self, function_object: Function) -> bool:
+    def is_in_text_section(self, function_node: Function) -> bool:
         """
         Check if the given function is located within the .text section of the binary.
 
         Args:
-            function_object (Function): The Binary Ninja function object to check.
+            function_node (Function): The Binary Ninja function object to check.
 
         Returns:
             bool: True if the function is in the .text section, False otherwise.
@@ -599,7 +549,7 @@ class VargFunctionCallResolver:
         if not text_section:
             return False
 
-        function_start_address = function_object.start
+        function_start_address = function_node.start
         text_section_start = text_section.start
         text_section_end = text_section.end
 
@@ -631,12 +581,12 @@ class VargFunctionCallResolver:
         else:
             iterator = functions_to_iterate
 
-        for function_object in iterator:
-            if self.is_in_text_section(function_object):
-                for block in function_object.medium_level_il:
+        for function_node in iterator:
+            if self.is_in_text_section(function_node):
+                for block in function_node.medium_level_il:
                     for mlil_loc in block:
                         if isinstance(mlil_loc, MediumLevelILCall):
-                            self.resolve_and_patch(resolved, function_object, mlil_loc)
+                            self.resolve_and_patch(resolved, function_node, mlil_loc)
 
         if output_path:
             self.save_patches_made_to_bndb(output_path)
@@ -682,15 +632,14 @@ class Analysis:
             - init_function_var_trace(...): Initialize taint tracing for a function variable.
             - init_global_var_trace(...): Initialize taint tracing for a global variable.
             - init_struct_member_trace(...): Initialize taint tracing for a struct member variable.
-            - render_sliced_output(...): Render the output of a taint slice for visualization or further analysis.
+            - render_sliced_output(...): Render the output of a taint slice for visualization or further analysis,
+              with options for colored output and log file generation.
         """
         self.bv = binaryview
         self.verbose = verbose
         self.libraries_mapped = libraries_mapped
         self.glob_refs_memoized = {}
-
-        if self.verbose:
-            self.trace_function_taint_printed = False
+        self.trace_function_taint_printed = False
 
     @cache
     def get_sliced_calls(
@@ -698,7 +647,7 @@ class Analysis:
         data: List[TaintedLOC],
         func_name: str,
         propagated_vars: List[
-            Union[TaintedVar, TaintedGlobal, TaintedVarOffset, TaintedStructMember]
+            Union[TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar]
         ],
     ) -> dict | None:
         """
@@ -712,7 +661,9 @@ class Analysis:
         Args:
             data (List[TaintedLOC]): The list of locations visited during the taint slice.
             func_name (str): The name of the function being analyzed.
-            propagated_vars (List[Union[TaintedVar, TaintedGlobal, TaintedVarOffset, TaintedStructMember]]):
+            propagated_vars (List[Union[
+            TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
+        ]]):
                 The list of tainted variables that were propagated during the slice.
 
         Returns:
@@ -734,7 +685,7 @@ class Analysis:
             addr = taintedloc.addr
             loc = taintedloc.loc
 
-            if int(loc.operation) == int(MediumLevelILOperation.MLIL_CALL):
+            if loc.operation.value == MediumLevelILOperation.MLIL_CALL.value:
                 param_map = param_var_map(loc.params, propagated_vars)
                 call_function_object = addr_to_func(self.bv, loc.dest.value.value)
                 if call_function_object:
@@ -781,7 +732,7 @@ class Analysis:
             func_obj (Function): The Binary Ninja function object containing the variable.
 
         Returns:
-            tuple[list[TaintedLOC], list[TaintedVar]]:
+            tuple[List[TaintedLOC], List[TaintedVar]]:
                 - A list of tainted code locations (TaintedLOC) where taint propagation was detected.
                 - A list of all propagated variables (TaintedVar) found during the trace.
         """
@@ -824,7 +775,7 @@ class Analysis:
             func_obj (Function): The Binary Ninja function object containing the global variable.
 
         Returns:
-            tuple[list[TaintedLOC], list[TaintedVar]]:
+            tuple[List[TaintedLOC], List[TaintedVar]]:
                 - A list of tainted code locations (TaintedLOC) where taint propagation was detected.
                 - A list of all propagated variables (TaintedVar) found during the trace.
         """
@@ -889,7 +840,7 @@ class Analysis:
             func_obj (Function): The Binary Ninja function object containing the struct member.
 
         Returns:
-            tuple[list[TaintedLOC], list[TaintedVar]]:
+            tuple[List[TaintedLOC], List[TaintedVar]]:
                 - A list of tainted code locations (TaintedLOC) where taint propagation was detected.
                 - A list of all propagated variables (TaintedVar) found during the trace.
         """
@@ -941,10 +892,10 @@ class Analysis:
                             f"[{Fore.RED}ERROR{Fore.RESET}] slice_type must be either forward or backward"
                         )
 
-        elif instr_mlil.operation == int(MediumLevelILOperation.MLIL_SET_VAR):
+        elif instr_mlil.operation.value == MediumLevelILOperation.MLIL_SET_VAR.value:
             source = instr_mlil.src
             base_var = instr_mlil.src.src
-            if source.operation == int(MediumLevelILOperation.MLIL_LOAD_STRUCT):
+            if source.operation.value == MediumLevelILOperation.MLIL_LOAD_STRUCT.value:
                 tainted_struct_member = TaintedStructMember(
                     target.loc_address,
                     target.variable,
@@ -977,7 +928,7 @@ class Analysis:
                         f"[{Fore.RED}ERROR{Fore.RESET}] slice_type must be either forward or backward"
                     )
 
-            elif source.operation == int(MediumLevelILOperation.MLIL_VAR_FIELD):
+            elif source.operation.value == MediumLevelILOperation.MLIL_VAR_FIELD:
                 tainted_struct_member = TaintedStructMember(
                     target.loc_address,
                     target.variable,
@@ -1023,7 +974,7 @@ class Analysis:
             func_obj (Function): The Binary Ninja function object containing the parameter.
 
         Returns:
-            tuple[list[TaintedLOC], list[TaintedVar]]:
+            tuple[List[TaintedLOC], List[TaintedVar]]:
                 - A list of tainted code locations (TaintedLOC) where taint propagation was detected.
                 - A list of all propagated variables (TaintedVar) found during the trace.
 
@@ -1059,47 +1010,6 @@ class Analysis:
             self, func_obj, first_ref_mlil, target_param, SliceType.Forward
         )
 
-    def render_sliced_output(
-        self,
-        sliced_func: Union[dict, list],
-        output_mode: OutputMode,
-        func_obj: Function,
-        propagated_vars: list,
-    ):
-        """
-        Renders or returns the output of a sliced function based on the specified output mode.
-
-        Args:
-            sliced_func (dict): A mapping from keys (usually address/function) to lists of TaintedLOC or TaintedVar.
-            output_mode (OutputMode): Specifies how to present the output.
-            func_obj (Function): The function object being analyzed.
-            propagated_vars (list): List of propagated variables (TaintedVar objects).
-
-        Returns:
-            tuple | None: Returns a tuple of (tainted_locs, func_name, propagated_vars) when `Returned`, otherwise None.
-        """
-        if output_mode == OutputMode.Printed:
-            print(
-                f"Address | LOC | Target Variable | Propagated Variable | Taint Confidence\n{(Fore.LIGHTGREEN_EX+'-'+Fore.RESET)*72}"
-            )
-            for i in sliced_func:
-                print(i.loc.instr_index, i)
-
-        elif output_mode == OutputMode.Returned:
-            if self.verbose:
-                print(
-                    f"Address | LOC | Target Variable | Propagated Variable | Taint Confidence\n{(Fore.LIGHTGREEN_EX+'-'+Fore.RESET)*72}"
-                )
-                for i in sliced_func:
-                    print(i.loc.instr_index, i)
-
-            return [i for i in sliced_func], func_obj.name, propagated_vars
-
-        else:
-            raise TypeError(
-                f"[{Fore.RED}ERROR{Fore.RESET}] output_mode must be either OutputMode.Printed or OutputMode.Returned"
-            )
-
     @cache
     def tainted_slice(
         self,
@@ -1107,9 +1017,10 @@ class Analysis:
         var_type: SlicingID,
         output: OutputMode = OutputMode.Returned,
         slice_type: SliceType = SliceType.Forward,
-    ) -> Union[tuple[list, str, list[Variable]], None]:
+        log_file: Optional[str] = None,
+    ) -> Union[tuple[list, str, List[Variable]], None]:
         """
-        Run a forward or backward taint analysis slice from a given variable..
+        Run a forward or backward taint analysis slice from a given variable.
 
         Traces the propagation of a target variable (local, global, struct member, or function parameter)
         within a single function, using either forward or backward slicing. Returns the list of tainted
@@ -1120,6 +1031,7 @@ class Analysis:
             var_type (SlicingID): The type of the target (FunctionVar, GlobalVar, StructMember, FunctionParam).
             output (OutputMode, optional): Whether to print or return the slice results. Default is Returned.
             slice_type (SliceType, optional): Slicing direction (Forward or Backward). Default is Forward.
+            log_file (str, optional): Path to save output to a log file. Default is None (no logging).
 
         Returns:
             tuple[list, str, list]:
@@ -1135,10 +1047,9 @@ class Analysis:
         else:
             func_obj = addr_to_func(self.bv, target.loc_address)
             if func_obj is None:
-                print(
-                    f"[{Fore.RED}Error{Fore.RESET}] Could not find a function containing address: {target.loc_address:#0x}"
+                raise ValueError(
+                    f"Could not find a function containing address: {target.loc_address:#0x}"
                 )
-                return None
 
         sliced_func = []
         propagated_vars = []
@@ -1178,15 +1089,26 @@ class Analysis:
                 )
 
         if output == OutputMode.Printed:
-            self.render_sliced_output(
-                sliced_func, OutputMode.Printed, func_obj, propagated_vars
+            render_sliced_output(
+                sliced_func,
+                OutputMode.Printed,
+                func_obj,
+                propagated_vars,
+                self.verbose,
+                True if log_file is None else False,
+                log_file,
             )
 
         elif output == OutputMode.Returned:
-            tainted_locs, func_name, tainted_vars = self.render_sliced_output(
-                sliced_func, OutputMode.Returned, func_obj, propagated_vars
+            tainted_locs, func_name, tainted_vars = render_sliced_output(
+                sliced_func,
+                OutputMode.Returned,
+                func_obj,
+                propagated_vars,
+                self.verbose,
+                True if log_file is None else False,
+                log_file,
             )
-
             return tainted_locs, func_name, tainted_vars
 
         else:
@@ -1387,6 +1309,7 @@ class Analysis:
 
         # Handle printed output, if requested
         if output == OutputMode.Printed:
+            #:TODO clean this
             for (fn_name, var), (locs, _) in propagation_cache.items():
                 print(
                     f"Function: {fn_name} | Var: {var.name if hasattr(var, 'name') else var}"
@@ -1408,66 +1331,102 @@ class Analysis:
             MediumLevelILInstruction | None: The first MLIL instruction using the variable, or None if not found.
         """
         target_var = var_or_name
-        if isinstance(var_or_name, str):
-            matches = [v for v in func.mlil.ssa_form.vars if v.name == var_or_name]
-            if not matches:
-                return None
-            target_var = matches[0]
+        matches = [
+            v
+            for v in func.mlil.ssa_form.vars
+            if (hasattr(var_or_name, "name") and v.name == var_or_name.name)
+            or (not hasattr(var_or_name, "name") and v.name == var_or_name)
+        ]
+        if not matches:
+            return None
+
+        target_var = matches[0]
 
         for block in func.mlil.ssa_form:
             for instr in block:
                 if target_var in instr.vars_read or target_var in instr.vars_written:
                     return instr.address
+
         return None
+
+    def trace_function_taint_init(
+        self,
+        function_node: Union[int, Function],
+        tainted_params: Union[tuple, str, Variable, SSAVariable],
+        binary_view: Union[BinaryView, None] = None,
+        origin_function: Union[Function, None] = None,
+        original_tainted_params: tuple = None,
+        tainted_param_map: Union[dict, None] = None,
+    ) -> tuple:
+        if isinstance(function_node, int):
+            function_node = addr_to_func(self.bv, function_node)
+
+        if origin_function is None:
+            origin_function = function_node
+
+        if tainted_param_map is None:
+            tainted_param_map = {}
+
+        temp = []
+        if isinstance(tainted_params, tuple) and len(tainted_params) > 1:
+            for param in tainted_params:
+                temp.append(get_ssa_variable(function_node, param))
+
+            tainted_params = temp
+
+        else:
+            tainted_params = [get_ssa_variable(function_node, tainted_params)]
+
+        if original_tainted_params is None:
+            original_tainted_params = tainted_params
+
+        if binary_view is None:
+            binary_view = self.bv
+
+        return (
+            function_node,
+            tainted_params,
+            binary_view,
+            origin_function,
+            original_tainted_params,
+            tainted_param_map,
+        )
 
     @cache
     def trace_function_taint(
         self,
         function_node: Union[int, Function],
-        tainted_param: Union[Variable, str],
-        binary_view: BinaryView = None,
+        tainted_params: Union[tuple, Variable, str],
+        binary_view: BinaryView,
         origin_function: Function = None,
-        original_tainted_param: Tuple[Union[Variable, str, list[Variable]]] = None,
+        original_tainted_params: Union[Variable, str, tuple] = None,
         tainted_param_map: dict = None,
     ) -> InterprocTaintResult:
         """
         Perform interprocedural taint analysis on a function to determine if taint propagates to its return value or parameters.
-
-        Args:
-            function_node (int | Function): The function to analyze, as an address or Function object.
-            tainted_param (Variable | str): The parameter or variable to start taint analysis from.
-            binary_view (BinaryView, optional): The BinaryView object for analysis.
-            origin_function (Function, optional): The original function context for the analysis.
-            original_tainted_param (tuple, optional): The original tainted parameters for the trace.
-            tainted_param_map (dict, optional): Mapping of tainted parameters for tracking.
-
-        Returns:
-            InterprocTaintResult: The result of the taint analysis, including tainted parameters and return status.
-
-        :TODO fix:
-
-        1) i forgot which test case it was but its missing out on params tainted because of some non-existent backwards var propagation or something i forgot
-        iirc its something to do with the variable walking logic `walk_variable`
         """
-        if origin_function is None:
-            origin_function = function_node
+        (
+            function_node,
+            tainted_params,
+            binary_view,
+            origin_function,
+            original_tainted_params,
+            tainted_param_map,
+        ) = self.trace_function_taint_init(
+            function_node,
+            tainted_params,
+            binary_view,
+            origin_function,
+            original_tainted_params,
+            tainted_param_map,
+        )
 
         i_h = InterprocHelper(
             binary_view,
-            original_tainted_param,
+            original_tainted_params,
             origin_function,
             tainted_param_map,
             self,
-        )
-        function_node = i_h.convert_function_node_to_function_object(
-            binary_view, function_node
-        )
-        i_h.trace_init(
-            function_node,
-            tainted_param,
-            original_tainted_param,
-            binary_view,
-            tainted_param_map,
         )
 
         tainted_variables = set()
@@ -1475,14 +1434,12 @@ class Analysis:
         tainted_parameters = set()
 
         # Convert string parameter names to Variable objects in SSA form and wrap them in TaintedVar
-        i_h.convert_str_params_to_var(
-            tainted_param, function_node, tainted_variables, self
-        )
+        i_h.convert_str_params_to_var(tainted_params, function_node, tainted_variables)
 
-        i_h.print_banner(
+        i_h.print_banner_interproc_banner(
             self.verbose,
             self.trace_function_taint_printed,
-            tainted_param,
+            tainted_params,
             function_node,
         )
 
@@ -1490,14 +1447,24 @@ class Analysis:
             self, function_node, tainted_variables, variable_mapping, self.verbose
         )
 
+        from pprint import pprint
+
+        pprint(variable_mapping)
         # Extract underlying variables from TaintedVar before walking the mapping.
         underlying_tainted = {tv.variable for tv in tainted_variables}
+        print("Underlying tainted variables:", underlying_tainted)
+        print("Function parameter vars:", [p for p in origin_function.parameter_vars])
 
         # Determine all parameters that are tainted by walking through the variable mapping.
         for var in i_h.walk_variable(variable_mapping, underlying_tainted):
-            if isinstance(var, MediumLevelILVarSsa):
+            if isinstance(var, (MediumLevelILVarSsa, MediumLevelILVar)):
                 var = var.var
 
+            print(f"Checking variable: {var}")
+
+            print(
+                f"Checking if {var.name} is in function parameters: {[param.name for param in origin_function.parameter_vars]}"
+            )
             if var.name not in [param.name for param in origin_function.parameter_vars]:
                 continue
 
@@ -1522,7 +1489,7 @@ class Analysis:
 
         return InterprocTaintResult(
             tainted_param_names=tainted_parameters,
-            original_tainted_variables=original_tainted_param,
+            original_tainted_variables=original_tainted_params,
             is_return_tainted=ret_variable_tainted,
             tainted_param_map=tainted_param_map,
             target_function_params=origin_function.parameter_vars,
@@ -1547,14 +1514,14 @@ class Analysis:
         call_target = instr_mlil.dest
 
         if call_target.operation in [
-            int(MediumLevelILOperation.MLIL_CONST_PTR),
-            int(MediumLevelILOperation.MLIL_CONST),
+            MediumLevelILOperation.MLIL_CONST_PTR.value,
+            MediumLevelILOperation.MLIL_CONST.value,
         ]:
             target_addr = call_target.constant
         else:
             return None
 
-        func = self.bv.get_function_at(int(target_addr))
+        func = self.bv.get_function_at(target_addr)
         if not func:
             return None
 
@@ -1573,7 +1540,7 @@ class Analysis:
     def analyze_function_taint(
         self,
         func_symbol: Union[Symbol, str],
-        tainted_param: Variable,
+        tainted_param: Union[Variable, SSAVariable],
         loc: MediumLevelILInstruction,
     ) -> Union[InterprocTaintResult, FunctionModel, None]:
         """
@@ -1598,8 +1565,12 @@ class Analysis:
         if isinstance(func_symbol, str) and func_symbol in [
             func.name for func in modeled_functions
         ]:
-            function_model = modeled_functions[get_modeled_function_index(func_symbol)]
-            if tainted_param_in_model_sources(function_model, loc, tainted_param):
+            function_model: FunctionModel = modeled_functions[
+                get_modeled_function_index(func_symbol)
+            ]
+            if (
+                function_model.taints_return or function_model.taint_destinations
+            ) and tainted_param_in_model_sources(function_model, loc, tainted_param):
                 return function_model
 
         # Analyze imported function

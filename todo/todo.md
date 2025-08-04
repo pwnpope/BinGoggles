@@ -40,3 +40,21 @@
 - [ ] UAF: implement varias alloc functions to get their respective size param and see if the size is reallocated, see modules.py for more info and look for `TODO`
   - [ ] allocator like function identification
   - [ ] caching both allocator and deallocating functions for any continued analysis or repeated analysis
+
+
+
+
+
+
+===================================
+notes to self when coming back <--->
+
+1) tainted_param must now take a list instead of taking just one
+2) continue with the `test` test case try to figure out what is going wrong and why we're getting almost null output:
+```
+Tainted Parameter Names: set()
+Original Tainted Variables: temp_array
+Is Return Tainted: False
+Tainted Parameter Map: {}
+Target Function Parameters: <ParameterVariables: [<var int* final_array>, <var int* temp_array>, <var int size>, <var int start_val>, <var int shift>, <var int adjust_val>]>
+```
