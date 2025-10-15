@@ -865,6 +865,274 @@ def get_var_name(
         return v.variable.name
 
 
+def unwrap_var(v: MediumLevelILVar):
+    """
+    Return the underlying Variable for BNIL/SSA wrappers.
+
+    Args:
+        v (MediumLevelILVar): A MLIL Variable object that may expose a `.var` attribute.
+
+    Returns:
+        object: The underlying Variable if `v` has a `.var` attribute; otherwise `v` itself.
+    """
+    return getattr(v, "var", v)
+
+
+def const_int(node) -> Optional[int]:
+    """
+    Extract a concrete integer from MLIL constant-like nodes.
+
+    Args:
+        node: An MLIL node which may encode a constant (e.g., has `.constant` or `.value.value`).
+
+    Returns:
+        Optional[int]: The decoded integer value if present; otherwise None.
+    """
+    if hasattr(node, "constant"):
+        return node.constant
+    if hasattr(node, "value") and hasattr(node.value, "value"):
+        return node.value.value
+    return None
+
+
+def expr_has_var(node, var: Variable) -> bool:
+    """
+    Recursively check whether an expression tree references `var`.
+
+    Matches both:
+      - AddressOf(var) via node.operation == MLIL_ADDRESS_OF and node.src
+      - Direct reads via `vars_read` on intermediate nodes
+
+    Args:
+        node: An MLIL expression node (or subtree) to inspect.
+        var (Variable): The Binary Ninja Variable to search for in `node`.
+
+    Returns:
+        bool: True if `var` is referenced in the expression tree; otherwise False.
+    """
+    if node is None:
+        return False
+
+    if (
+        hasattr(node, "operation")
+        and node.operation == MediumLevelILOperation.MLIL_ADDRESS_OF.value
+    ):
+        if hasattr(node, "src") and unwrap_var(node.src) == unwrap_var(var):
+            return True
+    if hasattr(node, "vars_read") and node.vars_read:
+        for vr in node.vars_read:
+            if unwrap_var(vr) == unwrap_var(var):
+                return True
+    if hasattr(node, "operands"):
+        for op in node.operands:
+            if isinstance(op, list):
+                if any(expr_has_var(sub, var) for sub in op):
+                    return True
+            else:
+                if expr_has_var(op, var):
+                    return True
+    return False
+
+
+def expr_has_const_offset(node, target_off: Optional[int]) -> bool:
+    """
+    Recursively search an expression tree for a constant equal to `target_off`.
+
+    Args:
+        node: An MLIL expression node (or subtree) to inspect.
+        target_off (Optional[int]): Constant offset value to match.
+
+    Returns:
+        bool: True if any sub-node decodes to the exact integer `target_off`; otherwise False.
+    """
+    if node is None or target_off is None:
+        return False
+    if (ci := const_int(node)) is not None:
+        return ci == target_off
+    if hasattr(node, "operands"):
+        for op in node.operands:
+            if isinstance(op, list):
+                if any(expr_has_const_offset(sub, target_off) for sub in op):
+                    return True
+            else:
+                if expr_has_const_offset(op, target_off):
+                    return True
+    return False
+
+
+def expr_has_offset_var(node, off_var: Optional[Variable]) -> bool:
+    """
+    Recursively check whether an expression tree uses the variable `off_var` as an offset.
+
+    Args:
+        node: An MLIL expression node (or subtree) to inspect.
+        off_var (Optional[Variable]): Variable expected to appear as part of the offset expression.
+
+    Returns:
+        bool: True if `off_var` appears among `vars_read` (or nested) in the expression; otherwise False.
+    """
+    if node is None or off_var is None:
+        return False
+    if hasattr(node, "vars_read") and node.vars_read:
+        for vr in node.vars_read:
+            if unwrap_var(vr) == unwrap_var(off_var):
+                return True
+    if hasattr(node, "operands"):
+        for op in node.operands:
+            if isinstance(op, list):
+                if any(expr_has_offset_var(sub, off_var) for sub in op):
+                    return True
+            else:
+                if expr_has_offset_var(op, off_var):
+                    return True
+    return False
+
+
+def _addr_expr_matches_var_offset(
+    addr_expr, base_var: Variable, off_int: Optional[int], off_var: Optional[Variable]
+) -> bool:
+    """
+    Test whether an address expression uses `base_var` with an optional offset.
+
+    Matches:
+      - AddressOfField(base_var, offset) where offset equals `off_int` (if provided)
+      - General address expressions that contain `base_var` and either:
+        - a constant offset equal to `off_int`, or
+        - a variable offset that equals `off_var`
+
+    If no offset constraint is provided (`off_int` is None and `off_var` is None),
+    presence of `base_var` alone is sufficient.
+
+    Args:
+        addr_expr: The address-expression tree (e.g., MLIL AddressOf/AddressOfField/arith).
+        base_var (Variable): The base variable expected in the address calculation.
+        off_int (Optional[int]): The required constant offset, if any.
+        off_var (Optional[Variable]): The required variable offset, if any.
+
+    Returns:
+        bool: True if the expression matches the base and offset constraints; otherwise False.
+    """
+    if addr_expr is None:
+        return False
+
+    # Direct AddressOfField(base, offset)
+    if isinstance(addr_expr, MediumLevelILAddressOfField):
+        if unwrap_var(addr_expr.src) == unwrap_var(base_var):
+            if off_int is None or addr_expr.offset == off_int:
+                return True
+
+    # General case: AddressOf(base) [+ offset or + var]
+    base_present = expr_has_var(addr_expr, base_var)
+
+    if not base_present:
+        return False
+
+    has_const = (
+        expr_has_const_offset(addr_expr, off_int) if off_int is not None else False
+    )
+    has_off_var = (
+        expr_has_offset_var(addr_expr, off_var) if off_var is not None else False
+    )
+
+    # If we have an explicit offset to check, require one of them to be present.
+    if off_int is not None or off_var is not None:
+        return has_const or has_off_var
+
+    # If no offset supplied, base presence is sufficient.
+    return True
+
+@cache
+def get_var_offset_refs(
+    function_node: Function, tvo: TaintedVarOffset
+) -> List[MediumLevelILInstruction]:
+    """
+    Collect MLIL use-sites that access memory through base+offset of a TaintedVarOffset.
+
+    Matches:
+      - MLIL_LOAD/STORE address trees of the form AddressOf(base) [+ const/var]
+      - MLIL_{LOAD,STORE}_STRUCT with matching offset and base
+      - MLIL_VAR_FIELD with matching offset and base
+
+    Args:
+        function_node (Function): Function to scan.
+        tvo (TaintedVarOffset): The base/offset taint descriptor.
+
+    Returns:
+        List[MediumLevelILInstruction]: MLIL instructions that use base+offset addressing.
+    """
+    results: set[MediumLevelILInstruction] = set()
+    base_var = unwrap_var(tvo.variable)
+    off_int = None
+    if getattr(tvo, "offset", None) is not None:
+        if isinstance(tvo.offset, int):
+            off_int = tvo.offset
+        else:
+            off_int = const_int(tvo.offset)
+    off_var = (
+        unwrap_var(getattr(tvo, "offset_var", None))
+        if getattr(tvo, "offset_var", None)
+        else None
+    )
+
+    for block in function_node.mlil:
+        for instr_mlil in block:
+            op = instr_mlil.operation
+
+            # Struct-style ops (offset present on the instruction)
+            if op == MediumLevelILOperation.MLIL_LOAD_STRUCT.value:
+                if unwrap_var(instr_mlil.src.var) == unwrap_var(base_var):
+                    if off_int is None or instr_mlil.offset == off_int:
+                        results.add(instr_mlil)
+                continue
+
+            if op == MediumLevelILOperation.MLIL_STORE_STRUCT.value:
+                # Base var is on dest/src chain depending on form; check both src and dest vars if present
+                try:
+                    base_ok = False
+                    if hasattr(instr_mlil, "dest") and hasattr(instr_mlil.dest, "var"):
+                        base_ok |= unwrap_var(instr_mlil.dest.var) == unwrap_var(
+                            base_var
+                        )
+                    if (
+                        hasattr(instr_mlil, "src")
+                        and hasattr(instr_mlil.src, "src")
+                        and hasattr(instr_mlil.src.src, "var")
+                    ):
+                        base_ok |= unwrap_var(instr_mlil.src.src.var) == unwrap_var(
+                            base_var
+                        )
+                    if base_ok and (off_int is None or instr_mlil.offset == off_int):
+                        results.add(instr_mlil)
+                except Exception:
+                    pass
+                continue
+
+            if op == MediumLevelILOperation.MLIL_VAR_FIELD.value:
+                if hasattr(instr_mlil, "src") and hasattr(instr_mlil.src, "var"):
+                    if unwrap_var(instr_mlil.src.var) == unwrap_var(base_var):
+                        if off_int is None or instr_mlil.offset == off_int:
+                            results.add(instr_mlil)
+                continue
+
+            # Generic memory ops: Load/Store or SetVar with a Load src
+            addr_expr = None
+            if op == MediumLevelILOperation.MLIL_LOAD.value:
+                addr_expr = instr_mlil.src
+            elif op == MediumLevelILOperation.MLIL_STORE.value:
+                addr_expr = instr_mlil.dest
+            elif op == MediumLevelILOperation.MLIL_SET_VAR.value and isinstance(
+                getattr(instr_mlil, "src", None), MediumLevelILLoad
+            ):
+                addr_expr = instr_mlil.src
+
+            if addr_expr is not None and _addr_expr_matches_var_offset(
+                addr_expr, base_var, off_int, off_var
+            ):
+                results.add(instr_mlil)
+
+    return list(results)
+
+
 def extract_var_use_sites(
     var_to_trace: Union[
         TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
@@ -877,11 +1145,6 @@ def extract_var_use_sites(
 
     Depending on the type of `var_to_trace`, this function locates all instructions
     in the specified function that reference or interact with the variable:
-
-    - For `TaintedGlobal`, it finds global references by matching constant pointers.
-    - For `TaintedStructMember`, it locates struct field accesses with matching offsets.
-    - For other variables (e.g., `TaintedVar`, `TaintedVarOffset`), it uses Binary Ninja's
-      built-in MLIL variable reference retrieval.
 
     Args:
         var_to_trace (Union[
@@ -899,8 +1162,10 @@ def extract_var_use_sites(
     elif isinstance(var_to_trace, TaintedStructMember):
         return get_struct_field_refs(analysis.bv, var_to_trace)
 
+    elif isinstance(var_to_trace, TaintedVarOffset):
+        return get_var_offset_refs(function_node, var_to_trace)
+
     else:
-        #:TODO add accuracy tracking for TaintedVarOffset
         return function_node.get_mlil_var_refs(
             var_to_trace.variable if hasattr(var_to_trace, "variable") else var_to_trace
         )
@@ -1096,9 +1361,15 @@ def skip_instruction(
         return TraceDecision.SKIP_AND_DISCARD
 
     # Hard time-direction guards
-    if trace_type == SliceType.Backward and mlil_loc.instr_index > first_mlil_loc.instr_index:
+    if (
+        trace_type == SliceType.Backward
+        and mlil_loc.instr_index > first_mlil_loc.instr_index
+    ):
         return TraceDecision.SKIP_AND_PROCESS
-    if trace_type == SliceType.Forward and mlil_loc.instr_index < first_mlil_loc.instr_index:
+    if (
+        trace_type == SliceType.Forward
+        and mlil_loc.instr_index < first_mlil_loc.instr_index
+    ):
         return TraceDecision.SKIP_AND_PROCESS
 
     # Always allow recording a RET (sink), but don't trace through it
