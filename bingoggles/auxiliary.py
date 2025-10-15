@@ -881,6 +881,9 @@ def skip_instruction(
     if not mlil_loc:
         return TraceDecision.SKIP_AND_DISCARD
 
+    if mlil_loc.operation.value == MediumLevelILOperation.MLIL_RET.value:
+        return TraceDecision.PROCESS_AND_DISCARD
+
     if trace_type == SliceType.Forward:
         micro_decision = micro_propagated_slice(
             var_to_trace, function_node, tuple(vars_found), analysis
@@ -1005,8 +1008,13 @@ def find_load_store_data(
 
         if var_offset and not isinstance(var_offset, int):
             tainted_offset_var = [
-                var.variable for var in already_iterated if var.variable == var_offset
+                var.variable
+                for var in already_iterated
+                if var is not None
+                and hasattr(var, "variable")
+                and var.variable == var_offset
             ]
+
             if not tainted_offset_var and allow_append:
                 append_bingoggles_var_by_type(
                     var_offset, tainted_offset_var, mlil_loc, analysis, var_to_trace

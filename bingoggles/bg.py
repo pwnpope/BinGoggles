@@ -71,11 +71,11 @@ class InterprocHelper:
         Returns:
             None
         """
-        tainted_variables.add(
-            create_tainted_var_offset_from_load_store(
-                loc, tainted_variables, self.analysis
-            )
+        tv = create_tainted_var_offset_from_load_store(
+            loc, tainted_variables, self.analysis
         )
+        if tv is not None:
+            tainted_variables.add(tv)
 
     def gather_mlil_call_data(
         self, loc, tainted_variables: set
@@ -108,7 +108,11 @@ class InterprocHelper:
             tainted_sub_params = [
                 param[1].name
                 for param in zipped_params
-                if any(tv.variable == param[0].ssa_form.var for tv in tainted_variables)
+                if any(
+                    tv.variable == param[0].ssa_form.var
+                    for tv in tainted_variables
+                    if tv is not None
+                )
             ]
 
             return CallData(
@@ -320,10 +324,21 @@ class InterprocHelper:
                 else:
                     if loc.vars_written:
                         var = loc.vars_written[0]
+                        if analysis.verbose:
+                            op_name = MediumLevelILOperation(loc.operation).name
+                            reads = ", ".join(
+                                getattr(v, "name", str(getattr(v, "var", v)))
+                                for v in (loc.vars_read or [])
+                            ) or "None"
+                            print(
+                                f"[{Fore.YELLOW}WARN{Fore.RESET}] Unhandled MLIL op "
+                                f"{Fore.CYAN}{op_name}{Fore.RESET} at {loc.address:#x}; "
+                                f"tainting written var {Fore.MAGENTA}{getattr(var, 'name', str(var))}{Fore.RESET} "
+                                f"from reads [{reads}]"
+                            )
                         append_bingoggles_var_by_type(
                             var, tainted_variables, loc, analysis
                         )
-
     def trace_through_node(
         self,
         analysis,
@@ -358,12 +373,15 @@ class InterprocHelper:
 
             # If any read variable is tainted, mark the written variables as tainted
             tainted_variables.update([t for t in tainted_variables if t])
+            if None in tainted_variables:
+                tainted_variables.discard(None)
 
             # Check if any read variable matches any tainted variable
             if any(
                 variables_match(tv.variable, read_var)
                 for tv in tainted_variables
                 for read_var in loc.vars_read
+                if tv is not None
             ):
                 for var in loc.vars_written:
                     append_bingoggles_var_by_type(
@@ -1489,14 +1507,15 @@ class Analysis:
             self, function_node, tainted_variables, variable_mapping, self.verbose
         )
 
-        #DEBUG remove later
+        # DEBUG remove later
         from pprint import pprint
+
         pprint(variable_mapping)
 
         # Extract underlying variables from TaintedVar before walking the mapping.
-        underlying_tainted = {tv.variable for tv in tainted_variables}
+        underlying_tainted = {tv.variable for tv in tainted_variables if tv is not None}
 
-        #DEBUG remove later
+        # DEBUG remove later
         print("Underlying tainted variables:", underlying_tainted)
         print("Function parameter vars:", [p for p in origin_function.parameter_vars])
 
@@ -1505,36 +1524,51 @@ class Analysis:
             for key, value in variable_mapping.items()
         }
 
-        #DEBUG remove later
+        # DEBUG remove later
         pprint(var_mapping_vars)
         pprint(tainted_variables)
 
         # Determine all parameters that are tainted by walking through the variable mapping.
         func_params = origin_function.parameter_vars
         for var in i_h.walk_variable(variable_mapping, underlying_tainted):
-            if var in var_mapping_vars and not any(v in func_params for v in var_mapping_vars[var]):
+            if var in var_mapping_vars and not any(
+                v in func_params for v in var_mapping_vars[var]
+            ):
                 mapped_vars = var_mapping_vars[var]
                 for mapped_var in mapped_vars:
-                        matching_param = next(
-                            (param for param in origin_function.parameter_vars 
-                            if hasattr(mapped_var, 'name') and hasattr(param, 'name') and mapped_var.name == param.name),
-                            None
-                        )
-                        
-                        if matching_param is not None:
-                            tainted_parameters.add(matching_param)
+                    matching_param = next(
+                        (
+                            param
+                            for param in origin_function.parameter_vars
+                            if hasattr(mapped_var, "name")
+                            and hasattr(param, "name")
+                            and mapped_var.name == param.name
+                        ),
+                        None,
+                    )
+
+                    if matching_param is not None:
+                        tainted_parameters.add(matching_param)
 
         # Build tainted parameter map: if multiple parameters became tainted during analysis,
         # map the original input parameter to all other parameters it influenced
         if len(tainted_parameters) > 1:
-            original_param = original_tainted_params[0] if isinstance(original_tainted_params, (list, tuple)) else original_tainted_params
-            
+            original_param = (
+                original_tainted_params[0]
+                if isinstance(original_tainted_params, (list, tuple))
+                else original_tainted_params
+            )
+
             original_key = None
             for param in origin_function.parameter_vars:
-                if hasattr(original_param, 'name') and hasattr(param, 'name') and original_param.name == param.name:
+                if (
+                    hasattr(original_param, "name")
+                    and hasattr(param, "name")
+                    and original_param.name == param.name
+                ):
                     original_key = param
                     break
-            
+
             if original_key:
                 other_tainted = [p for p in tainted_parameters if p != original_key]
                 if other_tainted:
