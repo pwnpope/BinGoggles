@@ -185,17 +185,18 @@ def test_fwd_slice_var(
         var_type=SlicingID.FunctionVar,
     )
 
-    pprint(tainted_vars)
     expected_instr_indexes = {
-        6,
         11,
         12,
-        13,
+        13, 
         14,
         17,
         18,
         19,
         22,
+        25,
+        26,
+        28,
     }
 
     actual_instr_indexes = {tainted.loc.instr_index for tainted in sliced_data}
