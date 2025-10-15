@@ -529,7 +529,9 @@ def resolve_got_callsite(binary_view: BinaryView, call_addr: int) -> Optional[Fu
     return None
 
 
-def base_var_written_by_store(mlil_instr: MediumLevelILInstruction, base_var: Variable) -> bool:
+def base_var_written_by_store(
+    mlil_instr: MediumLevelILInstruction, base_var: Variable
+) -> bool:
     """
     Determine whether an MLIL_STORE writes into memory whose base address is derived from `base_var`.
 
@@ -558,10 +560,15 @@ def base_var_written_by_store(mlil_instr: MediumLevelILInstruction, base_var: Va
 
     for v in dest.vars_read:
         vv = getattr(v, "var", v)
-        if hasattr(vv, "name") and hasattr(base_var, "name") and vv.name == base_var.name:
+        if (
+            hasattr(vv, "name")
+            and hasattr(base_var, "name")
+            and vv.name == base_var.name
+        ):
             return True
 
     return False
+
 
 def store_source_var(mlil_instr: MediumLevelILInstruction) -> Optional[Variable]:
     """
@@ -585,7 +592,11 @@ def store_source_var(mlil_instr: MediumLevelILInstruction) -> Optional[Variable]
         dest_vars = {getattr(v, "var", v) for v in dest.vars_read}
 
     # src.vars_read if available
-    if hasattr(mlil_instr, "src") and hasattr(mlil_instr.src, "vars_read") and mlil_instr.src.vars_read:
+    if (
+        hasattr(mlil_instr, "src")
+        and hasattr(mlil_instr.src, "vars_read")
+        and mlil_instr.src.vars_read
+    ):
         for v in mlil_instr.src.vars_read:
             vv = getattr(v, "var", v)
             if vv not in dest_vars:
@@ -599,6 +610,7 @@ def store_source_var(mlil_instr: MediumLevelILInstruction) -> Optional[Variable]
                 return vv
 
     return None
+
 
 def dest_contains_const_ptr(mlil_instr: MediumLevelILInstruction, addr: int) -> bool:
     """
@@ -637,6 +649,7 @@ def dest_contains_const_ptr(mlil_instr: MediumLevelILInstruction, addr: int) -> 
 
     return visit(dest)
 
+
 def store_struct_source_var(mlil_instr: MediumLevelILInstruction) -> Optional[Variable]:
     """
     Get the value source variable for a STORE_STRUCT instruction.
@@ -647,10 +660,15 @@ def store_struct_source_var(mlil_instr: MediumLevelILInstruction) -> Optional[Va
     Returns:
         Optional[Variable]: The variable providing the stored value, or None if unavailable.
     """
-    if hasattr(mlil_instr, "src") and hasattr(mlil_instr.src, "vars_read") and mlil_instr.src.vars_read:
+    if (
+        hasattr(mlil_instr, "src")
+        and hasattr(mlil_instr.src, "vars_read")
+        and mlil_instr.src.vars_read
+    ):
         v = mlil_instr.src.vars_read[0]
         return getattr(v, "var", v)
     return None
+
 
 def get_connected_var(
     analysis,
@@ -896,33 +914,40 @@ def micro_propagated_slice(
     function_node: Function,
     vars_found: list,
     analysis,
+    trace_type: SliceType = SliceType.Forward,
     max_depth=8,
 ) -> TraceDecision:
     """
-    Recursively determines if, when tracing backward from `var_to_trace`, any variables in its propagation chain
-    can influence instructions at addresses greater than the current variable's address (i.e., can propagate taint further).
-    This function helps avoid false positives in static path analysis by checking if any "parent" variables
-    (those that flow into `var_to_trace`) have use sites beyond the current variable's address, and are not already
-    present in `vars_found`. The recursion is bounded by `max_depth` to prevent infinite loops.
+    Direction-aware micro check to decide whether to continue tracing from the current variable.
+
+    This performs a small, bounded search from var_to_trace into its immediate parents (vars_read)
+    to see if any parent has a use-site that lies in the correct time direction relative to the
+    current variable:
+      - Forward: any parent use-site strictly after the current address.
+      - Backward: any parent use-site strictly before the current address.
+
+    It recurses (up to max_depth), avoiding cycles via vars_found, and returns a TraceDecision
+    indicating whether tracing should proceed.
 
     Args:
-        var_to_trace (Union[
-            TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
-        ]):
-            The variable currently being analyzed for backward propagation.
-        function_node (Function): The Binary Ninja function context for the analysis.
-        vars_found (list): List of variables already visited in the current trace (to avoid cycles).
-        max_depth (int, optional): Maximum recursion depth for the search. Defaults to 5.
+        var_to_trace: Current tainted variable node (global/struct/offset/var).
+        function_node: Function containing the MLIL.
+        vars_found: Worklist/visited set used to prevent cycles (compared by underlying variable).
+        analysis: Analysis context with helpers and BinaryView.
+        trace_type: Forward or Backward direction for time ordering.
+        max_depth: Maximum recursion depth for the micro search.
 
     Returns:
         TraceDecision:
-            - PROCESS_AND_TRACE if further propagation is possible (i.e., a parent variable can influence later instructions).
-            - SKIP_AND_PROCESS otherwise.
+            - PROCESS_AND_TRACE if a direction-consistent parent use-site is found.
+            - SKIP_AND_PROCESS otherwise (no evidence that further tracing is productive).
     """
     if max_depth == 0:
         return TraceDecision.SKIP_AND_PROCESS
 
     refs = extract_var_use_sites(var_to_trace, function_node, analysis)
+    cur_addr = getattr(var_to_trace, "addr", getattr(var_to_trace, "loc_address", 0))
+
     for ref in refs:
         loc = function_node.get_llil_at(ref.address).mlil
         if hasattr(loc, "vars_read") and loc.vars_read:
@@ -932,8 +957,14 @@ def micro_propagated_slice(
 
                 parent_refs = extract_var_use_sites(parent_var, function_node, analysis)
                 for parent_ref in parent_refs:
-                    if parent_ref.address > getattr(
-                        var_to_trace, "addr", getattr(var_to_trace, "loc_address", 0)
+                    if (
+                        trace_type == SliceType.Forward
+                        and parent_ref.address > cur_addr
+                    ):
+                        return TraceDecision.PROCESS_AND_TRACE
+                    if (
+                        trace_type == SliceType.Backward
+                        and parent_ref.address < cur_addr
                     ):
                         return TraceDecision.PROCESS_AND_TRACE
 
@@ -943,6 +974,7 @@ def micro_propagated_slice(
                         function_node,
                         tuple(list(vars_found) + [var_to_trace]),
                         analysis,
+                        trace_type,
                         max_depth - 1,
                     )
                     == TraceDecision.PROCESS_AND_TRACE
@@ -950,6 +982,38 @@ def micro_propagated_slice(
                     return TraceDecision.PROCESS_AND_TRACE
 
     return TraceDecision.SKIP_AND_PROCESS
+
+
+@cache
+def micro_propagated_slice_backward(
+    var_to_trace: Union[
+        TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar
+    ],
+    function_node: Function,
+    vars_found: list,
+    analysis,
+    max_depth=8,
+) -> TraceDecision:
+    """
+    Backward-specialized wrapper around micro_propagated_slice.
+
+    Calls micro_propagated_slice with trace_type=SliceType.Backward to check whether any
+    parent variable has a use-site earlier than the current variable's address, within
+    the bounded recursion depth.
+
+    Args:
+        var_to_trace: Current tainted variable node.
+        function_node: Function containing the MLIL.
+        vars_found: Worklist/visited set used to prevent cycles.
+        analysis: Analysis context with helpers and BinaryView.
+        max_depth: Maximum recursion depth for the micro search.
+
+    Returns:
+        TraceDecision consistent with micro_propagated_slice.
+    """
+    return micro_propagated_slice(
+        var_to_trace, function_node, vars_found, analysis, SliceType.Backward, max_depth
+    )
 
 
 def is_forward_in_past(
@@ -1031,28 +1095,40 @@ def skip_instruction(
     if not mlil_loc:
         return TraceDecision.SKIP_AND_DISCARD
 
+    # Hard time-direction guards
+    if trace_type == SliceType.Backward and mlil_loc.instr_index > first_mlil_loc.instr_index:
+        return TraceDecision.SKIP_AND_PROCESS
+    if trace_type == SliceType.Forward and mlil_loc.instr_index < first_mlil_loc.instr_index:
+        return TraceDecision.SKIP_AND_PROCESS
+
+    # Always allow recording a RET (sink), but don't trace through it
     if mlil_loc.operation.value == MediumLevelILOperation.MLIL_RET.value:
         return TraceDecision.PROCESS_AND_DISCARD
 
-    if trace_type == SliceType.Forward:
-        micro_decision = micro_propagated_slice(
-            var_to_trace, function_node, tuple(vars_found), analysis
-        )
-        if micro_decision != TraceDecision.PROCESS_AND_TRACE:
-            return TraceDecision.SKIP_AND_PROCESS
-
-    if isinstance(var_to_trace, TaintedVarOffset):
-        if not is_address_of_field_offset_match(mlil_loc, var_to_trace):
-            return TraceDecision.PROCESS_AND_DISCARD
-
+    # Seed special-case: if we're at the seed address, allow processing
     if first_mlil_loc.address == var_to_trace.loc_address:
         if get_connected_var(analysis, function_node, var_to_trace):
             return TraceDecision.PROCESS_AND_TRACE
 
-    if is_forward_in_past(
-        trace_type, mlil_loc, first_mlil_loc
-    ) or is_backward_in_future(trace_type, mlil_loc, first_mlil_loc):
-        return TraceDecision.SKIP_AND_PROCESS
+    # Address/offset mismatch for field-offset taints: skip entirely
+    if isinstance(var_to_trace, TaintedVarOffset):
+        if not is_address_of_field_offset_match(mlil_loc, var_to_trace):
+            return TraceDecision.SKIP_AND_DISCARD
+
+    # Micro gate (direction-aware)
+    if trace_type == SliceType.Forward:
+        micro_decision = micro_propagated_slice(
+            var_to_trace, function_node, tuple(vars_found), analysis, SliceType.Forward
+        )
+        if micro_decision != TraceDecision.PROCESS_AND_TRACE:
+            return TraceDecision.SKIP_AND_PROCESS
+
+    elif trace_type == SliceType.Backward:
+        micro_decision = micro_propagated_slice(
+            var_to_trace, function_node, tuple(vars_found), analysis, SliceType.Backward
+        )
+        if micro_decision != TraceDecision.PROCESS_AND_TRACE:
+            return TraceDecision.SKIP_AND_PROCESS
 
     return TraceDecision.PROCESS_AND_TRACE
 
