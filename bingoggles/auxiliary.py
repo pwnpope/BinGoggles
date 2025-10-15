@@ -1529,7 +1529,6 @@ def propagate_mlil_store(
         append_tainted_loc(
             function_node, collected_locs, mlil_loc, var_to_trace, analysis
         )
-        print("HIT THIS: ", mlil_loc, "1")
 
     if decision in [TraceDecision.PROCESS_AND_TRACE, TraceDecision.SKIP_AND_PROCESS]:
         ls_data: LoadStoreData = find_load_store_data(
@@ -1539,12 +1538,10 @@ def propagate_mlil_store(
             append_bingoggles_var_by_type(
                 ls_data.offset, vars_found, mlil_loc, analysis, var_to_trace
             )
-            print("HIT THIS: ", mlil_loc, "2")
         else:
             append_bingoggles_var_by_type(
                 ls_data.addr_var, vars_found, mlil_loc, analysis, var_to_trace
             )
-            print("HIT THIS: ", mlil_loc, "3", var_to_trace)
 
 
 def analyze_function_model(
