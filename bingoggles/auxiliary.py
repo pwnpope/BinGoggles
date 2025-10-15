@@ -529,6 +529,129 @@ def resolve_got_callsite(binary_view: BinaryView, call_addr: int) -> Optional[Fu
     return None
 
 
+def base_var_written_by_store(mlil_instr: MediumLevelILInstruction, base_var: Variable) -> bool:
+    """
+    Determine whether an MLIL_STORE writes into memory whose base address is derived from `base_var`.
+
+    This inspects the store destination address expression (dest) and checks whether the underlying
+    variables used to form that address contain `base_var`. It is intended to detect patterns like:
+        [&base + offset] = src
+
+    Args:
+        mlil_instr (MediumLevelILInstruction): The MLIL instruction to examine (expected MLIL_STORE).
+        base_var (Variable): The candidate base variable contributing to the destination address.
+
+    Returns:
+        bool: True if `mlil_instr` is a store and its destination address uses `base_var`; False otherwise.
+
+    Notes:
+        - Only considers MLIL_STORE (not STORE_SSA/STRUCT variants).
+        - Compares underlying Variables, handling SSA/IL wrappers via `.var` when present.
+    """
+    dest = getattr(mlil_instr, "dest", None)
+
+    if mlil_instr.operation != MediumLevelILOperation.MLIL_STORE.value:
+        return False
+
+    if not hasattr(dest, "vars_read") or not dest.vars_read:
+        return False
+
+    for v in dest.vars_read:
+        vv = getattr(v, "var", v)
+        if hasattr(vv, "name") and hasattr(base_var, "name") and vv.name == base_var.name:
+            return True
+
+    return False
+
+def store_source_var(mlil_instr: MediumLevelILInstruction) -> Optional[Variable]:
+    """
+    Extract the value-producing source variable for a store, excluding address-calculation variables.
+
+    For a store of the form:
+        [addr(base[, index])] = src
+    this returns the Variable that provides the stored value (`src`). Variables used only to compute
+    the destination address (e.g., `base`, `index`) are filtered out using `dest.vars_read`.
+
+    Args:
+        mlil_instr (MediumLevelILInstruction): The MLIL instruction to inspect (ideally MLIL_STORE).
+
+    Returns:
+        Optional[Variable]: The non-address Variable supplying the stored value, or None if it cannot be determined.
+    """
+    dest_vars = set()
+    dest = getattr(mlil_instr, "dest", None)
+
+    if hasattr(dest, "vars_read") and dest.vars_read:
+        dest_vars = {getattr(v, "var", v) for v in dest.vars_read}
+
+    # src.vars_read if available
+    if hasattr(mlil_instr, "src") and hasattr(mlil_instr.src, "vars_read") and mlil_instr.src.vars_read:
+        for v in mlil_instr.src.vars_read:
+            vv = getattr(v, "var", v)
+            if vv not in dest_vars:
+                return vv
+
+    # fallback: any read var not part of address
+    if hasattr(mlil_instr, "vars_read") and mlil_instr.vars_read:
+        for v in mlil_instr.vars_read:
+            vv = getattr(v, "var", v)
+            if vv not in dest_vars:
+                return vv
+
+    return None
+
+def dest_contains_const_ptr(mlil_instr: MediumLevelILInstruction, addr: int) -> bool:
+    """
+    Check if a store’s destination expression references a specific constant pointer address.
+
+    Args:
+        mlil_instr (MediumLevelILInstruction): Instruction to inspect (e.g., MLIL_STORE).
+        addr (int): Target address to match against any MediumLevelILConstPtr in the dest tree.
+
+    Returns:
+        bool: True if the dest tree contains a const-ptr equal to addr, otherwise False.
+    """
+    dest = getattr(mlil_instr, "dest", None)
+
+    if dest is None:
+        return False
+
+    def visit(node) -> bool:
+        if node is None:
+            return False
+
+        if isinstance(node, MediumLevelILConstPtr):
+            return node.value.value == addr
+
+        if hasattr(node, "operands"):
+            for op in node.operands:
+                if isinstance(op, list):
+                    for sub in op:
+                        if visit(sub):
+                            return True
+                else:
+                    if visit(op):
+                        return True
+
+        return False
+
+    return visit(dest)
+
+def store_struct_source_var(mlil_instr: MediumLevelILInstruction) -> Optional[Variable]:
+    """
+    Get the value source variable for a STORE_STRUCT instruction.
+
+    Args:
+        mlil_instr (MediumLevelILInstruction): STORE_STRUCT instruction to inspect.
+
+    Returns:
+        Optional[Variable]: The variable providing the stored value, or None if unavailable.
+    """
+    if hasattr(mlil_instr, "src") and hasattr(mlil_instr.src, "vars_read") and mlil_instr.src.vars_read:
+        v = mlil_instr.src.vars_read[0]
+        return getattr(v, "var", v)
+    return None
+
 def get_connected_var(
     analysis,
     function_node: Function,
@@ -573,6 +696,15 @@ def get_connected_var(
             ):
                 connected_candidates.append((mlil.address, mlil.vars_read[0]))
 
+        if not connected_candidates and hasattr(target_variable, "variable"):
+            base_var = target_variable.variable
+            for block in function_node.mlil:
+                for instr_mlil in block:
+                    if base_var_written_by_store(instr_mlil, base_var):
+                        src_var = store_source_var(instr_mlil)
+                        if src_var is not None:
+                            connected_candidates.append((instr_mlil.address, src_var))
+
     elif isinstance(target_variable, TaintedGlobal):
         refs = get_mlil_glob_refs(analysis, function_node, target_variable)
 
@@ -588,6 +720,19 @@ def get_connected_var(
             ):
                 connected_candidates.append((mlil.address, mlil.vars_read[0]))
 
+        # Also catch stores into the global’s memory (e.g., [&glob + off] = src)
+        if not connected_candidates:
+            glob_addr = target_variable.const_ptr.value.value
+            for block in function_node.mlil:
+                for instr_mlil in block:
+                    if (
+                        instr_mlil.operation == MediumLevelILOperation.MLIL_STORE.value
+                        and dest_contains_const_ptr(instr_mlil, glob_addr)
+                    ):
+                        src_var = store_source_var(instr_mlil)
+                        if src_var is not None:
+                            connected_candidates.append((instr_mlil.address, src_var))
+
     elif isinstance(target_variable, TaintedStructMember):
         # Struct members may propagate from field access or assignment
         refs = get_struct_field_refs(function_node.view, target_variable)
@@ -596,6 +741,11 @@ def get_connected_var(
             mlil = function_node.get_llil_at(ref.address).mlil
             if not mlil:
                 continue
+
+            if mlil.operation == MediumLevelILOperation.MLIL_STORE_STRUCT.value:
+                src_var = store_struct_source_var(mlil)
+                if src_var is not None:
+                    connected_candidates.append((mlil.address, src_var))
 
             if hasattr(mlil, "vars_read") and mlil.vars_read:
                 connected_candidates.append((mlil.address, mlil.vars_read[0]))
@@ -1379,6 +1529,7 @@ def propagate_mlil_store(
         append_tainted_loc(
             function_node, collected_locs, mlil_loc, var_to_trace, analysis
         )
+        print("HIT THIS: ", mlil_loc, "1")
 
     if decision in [TraceDecision.PROCESS_AND_TRACE, TraceDecision.SKIP_AND_PROCESS]:
         ls_data: LoadStoreData = find_load_store_data(
@@ -1388,10 +1539,12 @@ def propagate_mlil_store(
             append_bingoggles_var_by_type(
                 ls_data.offset, vars_found, mlil_loc, analysis, var_to_trace
             )
+            print("HIT THIS: ", mlil_loc, "2")
         else:
             append_bingoggles_var_by_type(
                 ls_data.addr_var, vars_found, mlil_loc, analysis, var_to_trace
             )
+            print("HIT THIS: ", mlil_loc, "3", var_to_trace)
 
 
 def analyze_function_model(
