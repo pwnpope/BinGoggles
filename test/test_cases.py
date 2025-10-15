@@ -92,6 +92,7 @@ def test_backwards_slice_var(
         slice_type=SliceType.Backward,
     )
 
+    print(tainted_locs, tainted_vars)
     assert len(tainted_locs) > 0, "No tainted locations found"
     assert (
         len(tainted_locs) == 11
@@ -148,22 +149,45 @@ def test_fwd_slice_param(
     assert sliced_data and len(sliced_data) > 0, "No tainted locations found"
 
     expected_instr_indexes = {
-        0, 9, 10, 11, 19, 20, 21, 29, 30, 31, 33, 34, 36, 37, 39, 41, 51, 52
+        0,
+        9,
+        10,
+        11,
+        19,
+        20,
+        21,
+        29,
+        30,
+        31,
+        33,
+        34,
+        36,
+        37,
+        39,
+        41,
+        51,
+        52,
     }
     actual_instr_indexes = {loc.loc.instr_index for loc in sliced_data}
 
-    assert len(sliced_data) == len(expected_instr_indexes), (
-        f"Expected {len(expected_instr_indexes)} tainted locations, got {len(sliced_data)}"
-    )
+    assert len(sliced_data) == len(
+        expected_instr_indexes
+    ), f"Expected {len(expected_instr_indexes)} tainted locations, got {len(sliced_data)}"
     assert actual_instr_indexes == expected_instr_indexes, (
         f"Expected instruction indexes {sorted(expected_instr_indexes)}, "
         f"got {sorted(actual_instr_indexes)}"
     )
 
     # Key use/seed/sink checks
-    assert any(loc.loc.instr_index == 0 for loc in sliced_data), "Missing seed (var_4c = a)"
-    assert any(loc.loc.instr_index == 41 for loc in sliced_data), "Missing snprintf use site"
-    assert any(loc.loc.instr_index == 52 for loc in sliced_data), "Missing return instruction"
+    assert any(
+        loc.loc.instr_index == 0 for loc in sliced_data
+    ), "Missing seed (var_4c = a)"
+    assert any(
+        loc.loc.instr_index == 41 for loc in sliced_data
+    ), "Missing snprintf use site"
+    assert any(
+        loc.loc.instr_index == 52 for loc in sliced_data
+    ), "Missing return instruction"
 
 
 def test_fwd_slice_var(
@@ -188,7 +212,7 @@ def test_fwd_slice_var(
     expected_instr_indexes = {
         11,
         12,
-        13, 
+        13,
         14,
         17,
         18,
