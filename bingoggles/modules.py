@@ -314,7 +314,8 @@ class UseAfterFreeDetection:
                 for loc in block:
                     if (
                         loc.address >= dealloc_loc.loc.address
-                        and int(loc.operation) == MediumLevelILOperation.MLIL_CALL.value
+                        and loc.operation.value
+                        == MediumLevelILOperation.MLIL_CALL.value
                     ):
                         try:
                             func = self.bv.get_functions_containing(
@@ -362,8 +363,10 @@ class UseAfterFreeDetection:
                             ):
                                 return False
 
-                            if alloc_func and int(size.value) == int(
-                                alloc_func.loc.params[0].value
+                            if (
+                                alloc_func
+                                and size.value.value
+                                == alloc_func.loc.params[0].value.value
                             ):
                                 return True
 
@@ -515,12 +518,13 @@ class UseAfterFreeDetection:
             if isinstance(size, MediumLevelILVar) and size in tainted_vars:
                 return True
 
-            elif (size, MediumLevelILConst) and int(size.value) == 0:
+            #:FIXME why am i doing the same thing twice here? and why am i doing it weirdly the second time
+            elif isinstance(size, MediumLevelILConst) and size.value.value == 0:
                 return True
 
             elif (
                 size.operation.value == MediumLevelILOperation.MLIL_CONST.value
-                and int(size) == 0
+                and size.value.value == 0
             ):
                 return True
 

@@ -144,7 +144,7 @@ we run the `patch_function_params` function than we can set that variable to tru
 @cache
 def get_symbol_from_const_ptr(
     bv: BinaryView, const_ptr: Union[MediumLevelILConstPtr, Variable, MediumLevelILVar]
-) -> Optional[Symbol]:
+) -> Optional[Union[Symbol, str]]:
     """
     Resolve a const-pointer operand back to its data symbol.
 
@@ -153,13 +153,26 @@ def get_symbol_from_const_ptr(
         const_ptr (MediumLevelILConstPtr): An MLIL ConstPtr whose .value is the address of some data.
 
     Returns:
-        The matching Symbol of type DataSymbol, or None if not found.
+        The matching Symbol of type DataSymbol or str of the global variable, or None if not found.
     """
     for symbol in [
-        s for s in bv.get_symbols() if int(s.type) == int(SymbolType.DataSymbol)
+        s for s in bv.get_symbols() if s.type.value == SymbolType.DataSymbol.value
     ]:
         if symbol.address == const_ptr.value.value:
             return symbol
+
+    for segment in bv.segments:
+        entry_address = const_ptr.value.value
+        if entry_address >= segment.start and segment.end <= entry_address:
+            section_name = get_section_by_addr(bv, entry_address)
+            section = bv.sections.get(section_name)
+            for addr in range(section.start, section.end, bv.address_size):
+                if addr == entry_address:
+                    addr = f"{addr:#x}"[2:]
+                    return PseudoGlobalVariable(
+                        name=f"data_{addr}",
+                        address=entry_address,
+                    )
 
     return None
 
@@ -256,6 +269,7 @@ def param_var_map(
                 if param not in param_info:
                     param_info[param] = (idx, pos)
                 break
+
     return param_info
 
 
@@ -319,33 +333,34 @@ def is_address_of_field_offset_match(
         bool: True if the offset in the instruction matches the offset of `var_to_trace`,
               otherwise False.
     """
-    destination, source = mlil_instr.dest, (
-        mlil_instr.src if hasattr(mlil_instr, "src") else None
-    )
+    if hasattr(mlil_instr, "dest"):
+        destination, source = mlil_instr.dest, (
+            mlil_instr.src if hasattr(mlil_instr, "src") else None
+        )
 
-    if isinstance(destination, list):
-        for d in destination:
-            if isinstance(d, MediumLevelILAddressOfField):
-                offset = d.offset
-                if offset == var_to_trace.offset:
-                    return True
+        if isinstance(destination, list):
+            for d in destination:
+                if isinstance(d, MediumLevelILAddressOfField):
+                    offset = d.offset
+                    if offset == var_to_trace.offset:
+                        return True
 
-    elif isinstance(destination, MediumLevelILAddressOfField):
-        offset = destination.offset
-        if offset == var_to_trace.offset:
-            return True
+        elif isinstance(destination, MediumLevelILAddressOfField):
+            offset = destination.offset
+            if offset == var_to_trace.offset:
+                return True
 
-    if isinstance(source, list):
-        for s in source:
-            if isinstance(s, MediumLevelILAddressOfField):
-                offset = s.offset
-                if offset == var_to_trace.offset:
-                    return True
+        if isinstance(source, list):
+            for s in source:
+                if isinstance(s, MediumLevelILAddressOfField):
+                    offset = s.offset
+                    if offset == var_to_trace.offset:
+                        return True
 
-    elif isinstance(source, MediumLevelILAddressOfField):
-        offset = source.offset
-        if offset == var_to_trace.offset:
-            return True
+        elif isinstance(source, MediumLevelILAddressOfField):
+            offset = source.offset
+            if offset == var_to_trace.offset:
+                return True
 
     return False
 
@@ -378,8 +393,10 @@ def get_struct_field_name(loc: MediumLevelILInstruction):
 
 @cache
 def get_mlil_glob_refs(
-    analysis, function_node: Function, var_to_trace: TaintedGlobal
-) -> List:
+    analysis,
+    function_node: Function,
+    var_to_trace: Union[TaintedGlobal, PseudoGlobalVariable],
+) -> List[MediumLevelILInstruction]:
     """
     Finds all MLIL instructions that reference a given global variable.
 
@@ -399,12 +416,16 @@ def get_mlil_glob_refs(
     if var_to_trace.variable in analysis.glob_refs_memoized.keys():
         return analysis.glob_refs_memoized[var_to_trace.variable]
 
-    for instr_mlil in function_node.mlil.instructions:
-        for op in flat(instr_mlil.operands):
-            if isinstance(op, MediumLevelILConstPtr):
-                symbol = get_symbol_from_const_ptr(analysis.bv, op)
-                if symbol and symbol.name == var_to_trace.variable:
-                    variable_use_sites.append(instr_mlil)
+    for ref in analysis.bv.get_code_refs(
+        var_to_trace.address
+        if isinstance(var_to_trace, PseudoGlobalVariable)
+        else var_to_trace.const_ptr.value.value
+    ):
+        if (
+            ref.address >= function_node.start
+            and ref.address <= function_node.highest_address
+        ):
+            variable_use_sites.append(function_node.get_llil_at(ref.address).mlil)
 
     analysis.glob_refs_memoized[var_to_trace.variable] = variable_use_sites
     return variable_use_sites
@@ -437,7 +458,7 @@ def is_rw_operation(instr_mlil: MediumLevelILInstruction):
     ]
 
     def op_is_rw(il):
-        return hasattr(il, "operation") and int(il.operation) in read_write_ops
+        return hasattr(il, "operation") and il.operation.value in read_write_ops
 
     if not op_is_rw(instr_mlil):
         return False
@@ -637,7 +658,7 @@ def init_vars_found(
 
 def get_var_name(
     v: Union[TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar]
-) -> str:
+) -> Optional[str]:
     """
     Retrieves a consistent, human-readable name for a tainted variable or related object.
 
@@ -660,6 +681,9 @@ def get_var_name(
         - For TaintedVarOffset: returns the `.name` attribute directly.
         - For TaintedVar: returns `.variable.name`.
     """
+    if v is None:
+        return None
+
     if isinstance(v, TaintedGlobal):
         return v.variable
 
@@ -1029,7 +1053,7 @@ def create_tainted_var_offset_from_load_store(
             mlil_loc, already_iterated, analysis, var_to_trace, allow_append=False
         )
 
-    return TaintedVarOffset(
+    data = TaintedVarOffset(
         ls_data.addr_var,
         ls_data.offset,
         ls_data.tainted_offset_var,
@@ -1057,7 +1081,7 @@ def create_tainted_global(
         Union[None, TaintedGlobal]: A TaintedGlobal object if a symbol is found, otherwise None.
     """
     glob_symbol = get_symbol_from_const_ptr(analysis.bv, global_var)
-    if glob_symbol:
+    if isinstance(glob_symbol, (Symbol, PseudoGlobalVariable)):
         return TaintedGlobal(
             glob_symbol.name,
             confidence_level,
@@ -1259,14 +1283,14 @@ def propagate_mlil_store_struct(
         struct_offset = mlil_loc.ssa_form.offset
         instr_hlil = function_node.get_llil_at(mlil_loc.address).hlil
 
-        if instr_hlil.operation == int(HighLevelILOperation.HLIL_ASSIGN):
+        if instr_hlil.operation == HighLevelILOperation.HLIL_ASSIGN.value:
             lhs = instr_hlil.dest
 
-            if lhs.operation == int(HighLevelILOperation.HLIL_DEREF_FIELD):
+            if lhs.operation == HighLevelILOperation.HLIL_DEREF_FIELD.value:
                 struct_offset = lhs.offset
                 base_expr = lhs.src
 
-                if base_expr.operation == int(HighLevelILOperation.HLIL_VAR):
+                if base_expr.operation == HighLevelILOperation.HLIL_VAR.value:
                     base_var = base_expr.var
                     tainted_struct_member = TaintedStructMember(
                         loc_address=instr_hlil.address,
@@ -1755,7 +1779,21 @@ def propagate_mlil_set_var(
                     address_variable, var_offset = mlil_loc.src.vars_read
 
                 except ValueError:
-                    address_variable = mlil_loc.src.vars_read[0]
+                    address_variable = mlil_loc.src.vars_read
+                    if len(address_variable) < 1:
+                        const_ptr = mlil_loc.src.operands[0]
+                        glob_symbol = get_symbol_from_const_ptr(analysis.bv, const_ptr)
+                        if isinstance(glob_symbol, (Symbol, PseudoGlobalVariable)):
+                            address_variable = TaintedGlobal(
+                                glob_symbol.name,
+                                var_to_trace.confidence_level,
+                                mlil_loc.address,
+                                const_ptr,
+                                glob_symbol,
+                            )
+                    else:
+                        address_variable = mlil_loc.src.vars_read[0]
+
                     var_offset = None
 
             else:
@@ -2097,27 +2135,28 @@ def trace_tainted_variable(
         if var_name in [get_var_name(var) for var in already_iterated]:
             continue
 
-        # since we are tracing a new variable, we're going to append to the already_iterated list
-        already_iterated.append(var_to_trace)
+        if var_to_trace and var_name:
+            # since we are tracing a new variable, we're going to append to the already_iterated list
+            already_iterated.append(var_to_trace)
 
-        # extract use sites from var_to_trace
-        variable_use_sites = extract_var_use_sites(
-            var_to_trace, function_node, analysis
-        )
-
-        for ref in variable_use_sites:
-            instr_mlil = function_node.get_llil_at(ref.address).mlil
-            propagate_by_mlil_operation(
-                function_node,
-                instr_mlil,
-                vars_found,
-                var_to_trace,
-                collected_locs,
-                already_iterated,
-                analysis,
-                trace_type,
-                mlil_loc,
+            # extract use sites from var_to_trace
+            variable_use_sites = extract_var_use_sites(
+                var_to_trace, function_node, analysis
             )
+
+            for ref in variable_use_sites:
+                instr_mlil = function_node.get_llil_at(ref.address).mlil
+                propagate_by_mlil_operation(
+                    function_node,
+                    instr_mlil,
+                    vars_found,
+                    var_to_trace,
+                    collected_locs,
+                    already_iterated,
+                    analysis,
+                    trace_type,
+                    mlil_loc,
+                )
 
     return sort_collected_locs(trace_type, collected_locs, already_iterated)
 
@@ -2264,9 +2303,16 @@ def get_func_param_from_call_param(bv, instr_mlil, var_to_trace):
         return None, None
 
 
+def get_const_ptr_from_loc(glob_var_value: int, loc: MediumLevelILInstruction):
+    for op in flat(loc.operands):
+        if isinstance(op, MediumLevelILConstPtr) and op.value.value == glob_var_value:
+            return op
+
+
 def get_use_sites(
     loc: MediumLevelILInstruction,
     var: Union[MediumLevelILVar, MediumLevelILVarSsa, SSAVariable, Variable],
+    analysis,
 ) -> Optional[list]:
     """
     Retrieve the use sites of a specific variable within a given MLIL instruction.
@@ -2286,6 +2332,23 @@ def get_use_sites(
     for v in vars:
         if isinstance(var, (MediumLevelILVar, MediumLevelILVarSsa)):
             var = var.var
+
+        if isinstance(var, int):
+            global_var = get_const_ptr_from_loc(var, loc)
+            glob_symbol = get_symbol_from_const_ptr(analysis.bv, global_var)
+            if glob_symbol:
+                tainted_global = TaintedGlobal(
+                    glob_symbol.name,
+                    TaintConfidence.MaybeTainted,
+                    loc.address,
+                    global_var,
+                    glob_symbol,
+                )
+
+                return get_mlil_glob_refs(
+                    analysis, addr_to_func(analysis.bv, loc.address), tainted_global
+                )
+
         if v.name == var.name:
             return v.use_sites
 
@@ -2310,15 +2373,26 @@ def tainted_param_in_model_sources(
         v.var if isinstance(v, (MediumLevelILVar, MediumLevelILVarSsa)) else None
         for v in loc.params
     ]
-    tainted_index = call_parameters.index(
-        tainted_param.variable if hasattr(tainted_param, "variable") else tainted_param
-    )
-    if function_model.vararg_start_index:
-        if tainted_index > function_model.vararg_start_index:
+
+    if len(call_parameters) < 1:
+        return False
+
+    try:
+        tainted_index = call_parameters.index(
+            tainted_param.variable
+            if hasattr(tainted_param, "variable")
+            else tainted_param
+        )
+
+        if function_model.vararg_start_index:
+            if tainted_index > function_model.vararg_start_index:
+                return True
+
+        if tainted_index in function_model.taint_sources:
             return True
 
-    if tainted_index in function_model.taint_sources:
-        return True
+    except ValueError:
+        return False
 
     return False
 
@@ -2343,3 +2417,27 @@ def get_ssa_variable(func, var: Union[SSAVariable, Variable, str]) -> SSAVariabl
     for ssa_var in func.mlil.ssa_form.vars:
         if ssa_var.var.name == var:
             return ssa_var.var
+
+
+def variables_match(tv_var, read_var):
+    """
+    Check if a tainted variable matches a read variable by comparing their underlying representations.
+
+    Args:
+        tv_var: The tainted variable to compare. Can be a Variable, SSAVariable, MediumLevelILVar,
+                MediumLevelILVarSsa, or any object with a 'var' attribute.
+        read_var: The read variable to compare against. Can be a Variable, SSAVariable,
+                  MediumLevelILVar, MediumLevelILVarSsa, or any object with a 'var' attribute.
+
+    Returns:
+        bool: True if the variables match (either by name or direct equality), False otherwise.
+    """
+    tainted_var = getattr(tv_var, "var", tv_var) if hasattr(tv_var, "var") else tv_var
+
+    read_variable = (
+        getattr(read_var, "var", read_var) if hasattr(read_var, "var") else read_var
+    )
+
+    if hasattr(tainted_var, "name") and hasattr(read_variable, "name"):
+        return tainted_var.name == read_variable.name
+    return tainted_var == read_variable

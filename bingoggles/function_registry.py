@@ -1,5 +1,5 @@
 from .bingoggles_types import FunctionModel
-from typing import Union, Optional
+from typing import Optional
 from binaryninja import Function, MediumLevelILInstruction, SymbolType
 from functools import cache
 

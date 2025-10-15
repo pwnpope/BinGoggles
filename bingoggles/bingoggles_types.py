@@ -108,7 +108,17 @@ class LoadStoreData:
         display_offset = (
             hex(self.offset) if isinstance(self.offset, int) else self.offset
         )
-        return f"[LoadStoreData]: {self.addr_var}:{display_offset}"
+        confidence_str = {
+            TaintConfidence.Tainted: "Tainted",
+            TaintConfidence.MaybeTainted: "MaybeTainted",
+            TaintConfidence.NotTainted: "NotTainted",
+        }.get(self.confidence_level, str(self.confidence_level))
+
+        tainted_var_info = ""
+        if self.tainted_offset_var:
+            tainted_var_info = f", offset_var={getattr(self.tainted_offset_var, 'variable', self.tainted_offset_var)}"
+
+        return f"[LoadStoreData @ {self.loc_address:#x}]: {self.addr_var}:{display_offset}{tainted_var_info} [{confidence_str}]"
 
     def __eq__(self, other):
         if not isinstance(other, LoadStoreData):
@@ -135,6 +145,45 @@ class LoadStoreData:
 
 
 @dataclass
+class PseudoGlobalVariable:
+    """
+    Represents a lightweight global variable reference without requiring a complete Binary Ninja symbol object.
+
+    This class provides a simplified way to track and reference global variables by name and address
+    when a full CoreSymbol object might not be available or necessary.
+
+    Attributes:
+        name (str): The name of the global variable.
+        address (int): The memory address where the global variable is located.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        address: int,
+    ):
+        self.name = name
+        self.address = address
+
+    def __eq__(self, other):
+        if not isinstance(other, PseudoGlobalVariable):
+            return False
+
+        return self.name == other.name and self.address == other.address
+
+    def __hash__(self):
+        return hash(
+            (
+                self.name,
+                self.address,
+            )
+        )
+
+    def __repr__(self):
+        return f"[{self.name} @ {self.address:#0x}]"
+
+
+@dataclass
 class TaintedGlobal:
     """
     Represents a tainted global variable within the analysis.
@@ -158,7 +207,7 @@ class TaintedGlobal:
         confidence_level: TaintConfidence,
         loc_address: int,
         const_ptr: MediumLevelILConstPtr,
-        symbol_object: CoreSymbol,
+        symbol_object: Union[CoreSymbol, PseudoGlobalVariable],
     ):
         self.variable = variable
         self.confidence_level = confidence_level
@@ -361,7 +410,10 @@ class TaintedVarOffset:
         parts = [f"&{self.variable}"]
 
         if self.offset is not None:
-            parts.append(f"+ {self.offset:#0x}")
+            if hasattr(self.offset, "value"):
+                parts.append(f"+ {self.offset.value.value:#0x}")
+            else:
+                parts.append(f"+ {self.offset}")
         elif self.offset_var is not None:
             parts.append(f"+ {getattr(self.offset_var, 'variable', self.offset_var)}")
 
@@ -682,6 +734,17 @@ class TaintedLOC:
         self.taint_confidence = taint_confidence
         self.addr = addr
         self.function_node = function_node
+
+    def __hash__(self):
+        return hash(
+            (
+                self.addr,
+                self.target_var,
+                self.propagated_var,
+                self.taint_confidence,
+                self.function_node,
+            )
+        )
 
     def __repr__(self):
         if self.loc.operation.value == MediumLevelILOperation.MLIL_CALL.value:
