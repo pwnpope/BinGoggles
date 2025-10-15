@@ -326,10 +326,13 @@ class InterprocHelper:
                         var = loc.vars_written[0]
                         if analysis.verbose:
                             op_name = MediumLevelILOperation(loc.operation).name
-                            reads = ", ".join(
-                                getattr(v, "name", str(getattr(v, "var", v)))
-                                for v in (loc.vars_read or [])
-                            ) or "None"
+                            reads = (
+                                ", ".join(
+                                    getattr(v, "name", str(getattr(v, "var", v)))
+                                    for v in (loc.vars_read or [])
+                                )
+                                or "None"
+                            )
                             print(
                                 f"[{Fore.YELLOW}WARN{Fore.RESET}] Unhandled MLIL op "
                                 f"{Fore.CYAN}{op_name}{Fore.RESET} at {loc.address:#x}; "
@@ -339,6 +342,7 @@ class InterprocHelper:
                         append_bingoggles_var_by_type(
                             var, tainted_variables, loc, analysis
                         )
+
     def trace_through_node(
         self,
         analysis,
