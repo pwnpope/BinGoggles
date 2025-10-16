@@ -1241,35 +1241,42 @@ class Analysis:
             if sliced_calls is None:
                 return
 
-            for (caller_func, loc_addr), (
+            for (_caller_func, _loc_addr), (
                 callee_name,
                 callee_addr,
-                loc,
+                _loc,
                 param_map,
             ) in sliced_calls.items():
                 if not analyze_imported_functions and callee_name in imported_functions:
                     continue
 
                 for param_var, (_, arg_pos) in param_map.items():
-                    param_name = getattr(param_var, "var", param_var).name
-                    propagated_names = {
-                        getattr(v.variable, "var", v.variable).name
-                        for v in propagated_vars
-                    }
-                    callee_func = addr_to_func(self.bv, callee_addr)
-                    try:
-                        callee_param = callee_func.parameter_vars[arg_pos - 1]
-                    except IndexError:
+                    base_param = getattr(param_var, "var", param_var)
+                    param_name = getattr(base_param, "name", None)
+                    if not param_name:
                         continue
 
-                    recurse_key = (callee_func.name, callee_param)
+                    propagated_names = set()
+                    for v in propagated_vars:
+                        base = getattr(v, "variable", v)
+                        base = getattr(base, "var", base)
+                        name = getattr(base, "name", None)
+                        if name:
+                            propagated_names.add(name)
 
                     if param_name not in propagated_names:
                         continue
 
+                    callee_func = addr_to_func(self.bv, callee_addr)
                     if not callee_func:
                         continue
 
+                    try:
+                        callee_param = callee_func.parameter_vars[arg_pos - 1]
+                    except (IndexError, TypeError):
+                        continue
+
+                    recurse_key = (callee_func.name, callee_param)
                     if recurse_key in visited:
                         continue
 
@@ -1300,18 +1307,26 @@ class Analysis:
             tuple(slice_data), og_func_name, tuple(propagated_vars)
         )
         if sliced_calls:
-            for (caller_func, loc_addr), (
+            for (_caller_func, loc_addr), (
                 callee_name,
                 callee_addr,
-                loc,
+                _loc,
                 param_map,
             ) in sliced_calls.items():
                 for param_var, (_, arg_pos) in param_map.items():
-                    param_name = getattr(param_var, "var", param_var).name
-                    propagated_names = {
-                        v.variable.name if hasattr(v.variable, "name") else v.variable
-                        for v in propagated_vars
-                    }
+                    base_param = getattr(param_var, "var", param_var)
+                    param_name = getattr(base_param, "name", None)
+                    if not param_name:
+                        continue
+
+                    # Collect names from propagated vars; ignore items without a name
+                    propagated_names = set()
+                    for v in propagated_vars:
+                        base = getattr(v, "variable", v)
+                        base = getattr(base, "var", base)
+                        name = getattr(base, "name", None)
+                        if name:
+                            propagated_names.add(name)
 
                     if param_name not in propagated_names:
                         continue
@@ -1322,7 +1337,7 @@ class Analysis:
 
                     try:
                         callee_param = callee_func.parameter_vars[arg_pos - 1]
-                    except IndexError:
+                    except (IndexError, TypeError):
                         continue
 
                     recurse_key = (callee_func.name, callee_param)
@@ -1336,8 +1351,7 @@ class Analysis:
                     ):
                         continue
 
-                    # we don't want to do a slice into the first LOC if its on a function call and the slice type is backwards
-                    # because in this case we'd want to go backwards NOT into the starting loc function call
+                    # Avoid recursing into the starting callsite when slicing backward
                     if (
                         target.loc_address != loc_addr
                         and slice_type != SliceType.Backward
@@ -1345,7 +1359,7 @@ class Analysis:
                         _recurse_slice(callee_func.name, callee_param, callee_addr)
 
         if output == OutputMode.Printed:
-            for (fn_name, var), (locs, prop_vars) in propagation_cache.items():
+            for (fn_name, var), (locs, _prop_vars) in propagation_cache.items():
                 print(
                     f"\n{Fore.CYAN}Function:{Fore.RESET} {Fore.GREEN}{fn_name}{Fore.RESET}"
                 )
@@ -1361,8 +1375,6 @@ class Analysis:
                     pretty_print_path_data(locs)
                 else:
                     print(f"{Fore.RED}No tainted locations found{Fore.RESET}")
-
-                # print()  # Add spacing between function outputs
 
         return propagation_cache
 

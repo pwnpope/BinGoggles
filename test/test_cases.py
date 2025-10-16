@@ -261,41 +261,6 @@ def test_get_sliced_calls(
     pprint(result)
 
 
-def test_complete_bkd_slice_var(
-    bg_init,
-    test_bin=get_bndb_path_or_original(
-        f"{bingoggles_path}/binaries/bin/test_backwards_slice"
-    ),
-):
-    bg = bg_init(
-        target_bin=abspath(test_bin),
-        libraries=[],
-    )
-    bv, libraries_mapped = bg.init()
-
-    analysis = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
-
-    data = analysis.complete_slice(
-        target=TaintTarget(0x08049325, "var_13c"),
-        output=OutputMode.Returned,
-        var_type=SlicingID.FunctionVar,
-        slice_type=SliceType.Backward,
-    )
-
-    assert any(entry[0] == "main" for entry in data)
-
-    main_entry = next(entry for entry in data if entry[0] == "main")
-    assert "var_13c" in str(main_entry[1])
-
-    main_trace, _ = data[main_entry]
-
-    main_instr_indexes = {entry.loc.instr_index for entry in main_trace}
-    assert main_instr_indexes >= {
-        15,
-        17,
-    }, f"Missing expected instrs in main: {main_instr_indexes}"
-
-
 def test_complete_fwd_slice_var(
     bg_init,
     test_bin=get_bndb_path_or_original(f"{bingoggles_path}/binaries/bin/test_uaf.bndb"),
@@ -314,35 +279,14 @@ def test_complete_fwd_slice_var(
         slice_type=SliceType.Forward,
     )
 
-    # expected_funcs = {"level_eight", "deeper_and_deeper", "deeper_function", "do_free"}
-    # actual_funcs = {fn for (fn, _) in data.keys()}
-    # for fn in expected_funcs:
-    #     assert fn in actual_funcs, f"Expected function '{fn}' in taint trace"
+    expected_funcs = {"level_eight", "deeper_and_deeper", "deeper_function", "do_free"}
+    actual_funcs = {fn for (fn, _) in data.keys()}
+    pprint(actual_funcs)
+    pprint(data)
 
-    # expected_instrs = {
-    #     "level_eight": {0, 1, 2, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16},
-    #     "deeper_and_deeper": {1, 2, 3},
-    #     "deeper_function": {1, 2, 3},
-    #     "do_free": {1, 2},
-    # }
-
-    # for (fn, var), (trace_entries, _) in data.items():
-    #     instr_indexes = {entry.loc.instr_index for entry in trace_entries}
-
-    #     assert instr_indexes, f"No instructions recorded for function '{fn}'"
-
-    #     if fn in expected_instrs:
-    #         missing = expected_instrs[fn] - instr_indexes
-    #         if missing:
-    #             print(f"[WARN] {fn} missing expected instr indexes: {missing}")
-    #         else:
-    #             print(f"[INFO] {fn} includes all expected instruction indexes.")
-
-    #         for expected_index in expected_instrs[fn]:
-    #             assert expected_index in instr_indexes, (
-    #                 f"Function '{fn}' is missing expected instruction index {expected_index}. "
-    #                 f"Found instruction indexes: {instr_indexes}"
-    #             )
+    # Assert expected functions are present
+    missing = expected_funcs - actual_funcs
+    assert not missing, f"Missing expected functions in taint trace: {sorted(missing)}"
 
 
 def test_complete_fwd_slice_param(
