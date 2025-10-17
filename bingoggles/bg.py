@@ -56,9 +56,42 @@ class InterprocHelper:
         original_tainted_params: tuple,
         variable: Union[Variable, SSAVariable],
         var_mapping: dict,
-    ) -> bool: ...
+        provenance: Optional[Dict[Variable, set]] = None,
+    ) -> bool:
+        def norm(v):
+            if v is None:
+                return None
+            v = getattr(v, "variable", v)
+            v = getattr(v, "var", v)
+            return v
 
-    #:TODO
+        seeds: set = {norm(p) for p in original_tainted_params if norm(p) is not None}
+        target = norm(variable)
+        if target is None or not var_mapping:
+            return False
+
+        # Accept both caller->callee and callee->caller style maps
+        for caller_var, callee_var in getattr(var_mapping, "items", lambda: [])():
+            caller_n = norm(caller_var)
+            callee_n = norm(callee_var)
+
+            # If mapping is inverted, flip
+            if callee_n is None and caller_n == target:
+                # caller_n is actually callee; try to treat value as caller
+                callee_n, caller_n = caller_n, norm(callee_var)
+
+            if callee_n != target:
+                continue
+
+            if caller_n in seeds:
+                return True
+
+            if provenance:
+                deps = provenance.get(caller_n, set())
+                if any(s in deps for s in seeds):
+                    return True
+
+        return False
 
     def handle_mlil_store_ssa(self, loc, tainted_variables: set) -> None:
         """
@@ -105,15 +138,31 @@ class InterprocHelper:
             zipped_params = list(zip(call_params, function_call_params))
 
             # Identify sub-function parameters that are tainted by comparing the underlying variable
-            tainted_sub_params = [
-                param[1].name
-                for param in zipped_params
-                if any(
-                    tv.variable == param[0].ssa_form.var
-                    for tv in tainted_variables
-                    if tv is not None
-                )
-            ]
+            # tainted_sub_params = [
+            #     param[1].name
+            #     for param in zipped_params
+            #     if any(
+            #         tv.variable == param[0].ssa_form.var
+            #         for tv in tainted_variables
+            #         if tv is not None
+            #     )
+            # ]
+            var_mapping = {
+                cp.ssa_form.var: callee_param
+                for (cp, callee_param) in zipped_params
+                if hasattr(cp, "ssa_form")
+            }
+            # Optionally, you can compute provenance once per function and pass it here.
+            # For now, we only accept direct seed->param flow to avoid over-taint.
+            tainted_sub_params = []
+            for cp, callee_param in zipped_params:
+                # Only consider args currently tainted
+                if not any(tv and tv.variable == cp.ssa_form.var for tv in tainted_variables):
+                    continue
+                if InterprocHelper.does_variable_taint_param(
+                    self.original_tainted_params, callee_param, var_mapping
+                ):
+                    tainted_sub_params.append(callee_param.name)
 
             return CallData(
                 call_params,
@@ -228,11 +277,26 @@ class InterprocHelper:
         for ipc_data in list_ipc_data:
             if ipc_data and isinstance(ipc_data, InterprocTaintResult):
                 # Map back the tainted sub-function parameters to the current function's variables
-                tainted_sub_variables = [
-                    param[0].ssa_form.var
-                    for param in call_data.zipped_params
-                    if param[1].name in ipc_data.tainted_param_names
-                ]
+                # tainted_sub_variables = [
+                #     param[0].ssa_form.var
+                #     for param in call_data.zipped_params
+                #     if param[1].name in ipc_data.tainted_param_names
+                # ]
+                # Map back the tainted sub-function parameters to the current function's variables,
+                # but only if they are tainted by the selected seeds.
+                var_mapping = {
+                    cp.ssa_form.var: callee_param
+                    for (cp, callee_param) in call_data.zipped_params
+                    if hasattr(cp, "ssa_form")
+                }
+                tainted_sub_variables = []
+                for cp, callee_param in call_data.zipped_params:
+                    if callee_param.name not in ipc_data.tainted_param_names:
+                        continue
+                    if InterprocHelper.does_variable_taint_param(
+                        self.original_tainted_params, callee_param, var_mapping
+                    ):
+                        tainted_sub_variables.append(cp.ssa_form.var)
 
                 for sub_var in tainted_sub_variables:
                     append_bingoggles_var_by_type(
@@ -1412,15 +1476,22 @@ class Analysis:
 
     def trace_function_taint_init(
         self,
-        function_node: Union[int, Function],
-        tainted_params: Union[tuple, str, Variable, SSAVariable],
+        function_node: Union[int, str, Function],
+        tainted_params: Union[tuple, list, str, Variable, SSAVariable],
         binary_view: Union[BinaryView, None] = None,
         origin_function: Union[Function, None] = None,
         original_tainted_params: tuple = None,
         tainted_param_map: Union[dict, None] = None,
     ) -> tuple:
+        # Resolve function by address, name, or object
         if isinstance(function_node, int):
             function_node = addr_to_func(self.bv, function_node)
+        elif isinstance(function_node, str):
+            fns = self.bv.get_functions_by_name(function_node)
+            function_node = fns[0] if fns else None
+
+        if function_node is None:
+            raise ValueError("trace_function_taint_init: could not resolve function_node")
 
         if origin_function is None:
             origin_function = function_node
@@ -1428,25 +1499,32 @@ class Analysis:
         if tainted_param_map is None:
             tainted_param_map = {}
 
-        temp = []
-        if isinstance(tainted_params, tuple) and len(tainted_params) > 1:
-            for param in tainted_params:
-                temp.append(get_ssa_variable(function_node, param))
+        # Normalize tainted_params to a list and convert to SSA vars
+        params_in = tainted_params if isinstance(tainted_params, (list, tuple)) else [tainted_params]
+        norm_params: list = []
+        for p in params_in:
+            ssa = get_ssa_variable(function_node, p)
+            if ssa:
+                norm_params.append(ssa)
 
-            tainted_params = temp
-
-        else:
-            tainted_params = [get_ssa_variable(function_node, tainted_params)]
+        # Dedupe while preserving order
+        seen = set()
+        uniq_params = []
+        for p in norm_params:
+            key = getattr(p, "name", str(p))
+            if key not in seen:
+                uniq_params.append(p)
+                seen.add(key)
 
         if original_tainted_params is None:
-            original_tainted_params = tainted_params
+            original_tainted_params = tuple(uniq_params)
 
         if binary_view is None:
             binary_view = self.bv
 
         return (
             function_node,
-            tainted_params,
+            uniq_params,
             binary_view,
             origin_function,
             original_tainted_params,

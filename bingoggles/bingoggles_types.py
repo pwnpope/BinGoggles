@@ -25,7 +25,6 @@ class TaintConfidence:
     - MaybeTainted (0.5): The variable might be tainted.
     - NotTainted (0.0): The variable is known to be clean.
     """
-
     Tainted = 1.0
     MaybeTainted = 0.5
     NotTainted = 0.0
@@ -250,7 +249,17 @@ class TaintedGlobal:
 @dataclass
 class TaintedVar:
     """
-    This class is used for representing each tainted variable we gather.
+    Represents a single tainted local/SSA variable observed during analysis.
+
+    Purpose:
+        Records that a specific MLIL variable (or its SSA form) is tainted at a particular
+        program location, along with the confidence assigned to that taint.
+
+    Attributes:
+        variable (Variable | SSAVariable): The Binary Ninja variable (or SSA variable) that is tainted.
+        confidence_level (TaintConfidence): Confidence that the variable is tainted
+            (Tainted, MaybeTainted, or NotTainted).
+        loc_address (int): Address of the MLIL instruction where this taint was recorded.
     """
 
     def __init__(
@@ -259,12 +268,12 @@ class TaintedVar:
         confidence_level: TaintConfidence,
         loc_address: int,
     ):
-        self.variable: Variable = variable  # Tainted Variable
+        self.variable: Variable = variable
         self.confidence_level: TaintConfidence = (
-            confidence_level  # confidence level of being tainted
+            confidence_level
         )
         self.loc_address: int = (
-            loc_address  # loc address of where the variable was found to be tainted
+            loc_address
         )
 
     def __eq__(self, other):
@@ -303,7 +312,6 @@ class SliceType:
         Forward (int): Forward slicing (from source to sink).
         Backward (int): Backward slicing (from sink to source).
     """
-
     Forward = 0x0
     Backward = 0x1
 
@@ -318,7 +326,6 @@ class SlicingID:
         GlobalVar (int): A global variable symbol.
         StructMember (int): A member of a struct.
     """
-
     FunctionVar = 0x10
     FunctionParam = 0x20
     GlobalVar = 0x30
@@ -341,9 +348,28 @@ class OutputMode:
 @dataclass
 class TaintedVarOffset:
     """
-    Used for tracking and holding data for variables from within MLIL_STORE/MLIL_LOAD operations
-    """
+    Represents a tainted memory reference composed of a base variable and an optional offset.
 
+    This type models address expressions seen in MLIL load/store operations (e.g., [&base + off]),
+    tracking both the taint on the referenced memory (base) and the taint coming from a symbolic
+    offset variable (if any). It is used to propagate taint when memory is accessed via an address
+    computed from a stack/local variable plus a constant or another variable.
+
+    Attributes:
+        variable (Variable):
+            The base address variable (e.g., var_35 in [&var_35 + rax_7]).
+        offset (int | MediumLevelILConst | MediumLevelILConstPtr | None):
+            The constant offset applied to the base, if present. May be None when the offset
+            is symbolic (i.e., provided via offset_var).
+        offset_var (TaintedVar | TaintedGlobal | TaintedVarOffset | TaintedStructMember | None):
+            The tainted entity contributing to a symbolic/dynamic offset (e.g., rax_7). None if
+            the offset is constant or absent.
+        confidence_level (TaintConfidence):
+            Taint confidence for the referenced memory at [variable + offset/offset_var].
+            This describes the taint of the memory access, not necessarily the offset_var itself.
+        loc_address (int):
+            Address of the MLIL instruction that produced this reference.
+    """
     def __init__(
         self,
         variable: Variable,
@@ -423,6 +449,24 @@ class TaintedVarOffset:
 
 
 class BGInit:
+    """
+    Initializes BinGoggles analysis state for a local binary and optional libraries.
+
+    Parameters:
+        target_bin (str): Absolute or relative path to the target binary to analyze.
+        libraries (list[str] | None): Optional list of library paths to preload and cache
+            for import matching.
+
+    Attributes:
+        target_bin (str): Path to the target binary.
+        libraries (list[str]): List of library paths to consider for matching imported functions.
+        cache_folder_name (str): Directory name used to store cached .bndb files.
+        cache_folder_path (str): Resolved path to the cache directory (set at runtime).
+
+    Notes:
+        - init() loads the Binary Ninja BinaryView for target_bin and returns (bv, libraries_mapped).
+        - When libraries are provided, matching/caching occurs.
+    """
     def __init__(self, target_bin: str, libraries: list = None):
         if libraries is None:
             libraries = []
@@ -581,6 +625,20 @@ class BGInitRpyc(BGInit):
 
 @dataclass
 class TaintedStructMember:
+    """
+    Represents a tainted access to a structure/aggregate member.
+    Records that a specific field within a struct-like object is tainted at a given
+    program location. Keeps both the HLIL variable that expresses the field access
+    and the underlying MLIL base variable that stores the data.
+
+    Attributes:
+        loc_address (int): Address of the MLIL instruction where the field access occurs.
+        member (str): Field name or textual representation of the accessed member.
+        offset (int): Byte offset of the member within the base object.
+        hlil_var (Variable): HLIL variable in the field reference (field-aware, higher-level).
+        variable (Variable): MLIL base variable backing the struct storage.
+        confidence_level (TaintConfidence): Confidence assigned to this tainted field access.
+    """
     def __init__(
         self,
         loc_address: int,
