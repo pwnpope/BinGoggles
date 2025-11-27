@@ -26,7 +26,40 @@ from bingoggles.modules import *
 import os
 from functools import lru_cache
 from pathlib import Path
+import pytest
 
+
+# Add a fixture to support both headless modes
+@pytest.fixture
+def bg_init(request):
+    """
+    Pytest fixture that provides either BGInit or BGInitRpyc based on --rpyc flag.
+    
+    Usage:
+        pytest -s test_cases.py::test_name                  # Uses BGInit (standard)
+        pytest -s --rpyc test_cases.py::test_name           # Uses BGInitRpyc (hugsy headless)
+    """
+    use_rpyc = request.config.getoption("--rpyc", default=False)
+    
+    if use_rpyc:
+        def _init(target_bin, libraries):
+            return BGInitRpyc(target_bin=target_bin, libraries=libraries)
+    else:
+        def _init(target_bin, libraries):
+            return BGInit(target_bin=target_bin, libraries=libraries)
+    
+    return _init
+
+
+# Configure pytest to accept --rpyc argument
+def pytest_addoption(parser):
+    """Add custom command line option for rpyc mode."""
+    parser.addoption(
+        "--rpyc",
+        action="store_true",
+        default=False,
+        help="Use rpyc (hugsy headless) instead of standard Binary Ninja headless"
+    )
 
 @lru_cache(maxsize=None)
 def find_dir(root_path: str, target_name: str) -> str | None:
@@ -73,10 +106,13 @@ def get_bndb_path_or_original(file_path: str) -> str:
 
 def test_backwards_slice_var(
     bg_init,
-    test_bin=get_bndb_path_or_original(
-        f"{bingoggles_path}/binaries/bin/test_mlil_store.bndb"
-    ),
+    # test_bin=get_bndb_path_or_original(
+    #     f"{bingoggles_path}/binaries/bin/test_mlil_store.bndb"
+    # ),
 ):
+    test_bin = get_bndb_path_or_original(
+        f"{bingoggles_path}/binaries/bin/test_mlil_store.bndb"
+    )
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[],

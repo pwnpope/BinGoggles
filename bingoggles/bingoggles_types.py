@@ -567,6 +567,21 @@ class BGInitRpyc(BGInit):
     is adjusted based on the number of libraries provided. Additionally, it handles the setup
     of the BinGoggles state for performing binary analysis, caching results, and loading the
     necessary libraries.
+    
+    Parameters:
+        target_bin (str): Absolute or relative path to the target binary to analyze.
+        libraries (list[str] | None): Optional list of library paths to preload and cache
+            for import matching.
+        host (str): RPyC server host address (default: "127.0.0.1").
+        port (int): RPyC server port (default: 18812).
+        timeout (int): Base timeout in seconds for RPyC operations (default: 600).
+        
+    Attributes:
+        host (str): RPyC server host.
+        port (int): RPyC server port.
+        timeout (int): Calculated timeout based on number of libraries.
+        cache_folder_name (str): Directory name used to store cached .bndb files.
+        cache_folder_path (str): Resolved path to the cache directory (set at runtime).
     """
 
     def __init__(
@@ -575,16 +590,28 @@ class BGInitRpyc(BGInit):
         libraries: list = None,
         host: str = "127.0.0.1",
         port: int = 18812,
-        timeout: int = 520,
+        timeout: int = 600,
     ):
         if libraries is None:
             libraries = []
         super().__init__(target_bin=target_bin, libraries=libraries)
         self.host = host
         self.port = port
-        self.timeout = timeout * len(libraries) if libraries else 1
+        # Calculate timeout: base timeout + (base * number of libraries)
+        # This accounts for both the target binary and all libraries
+        lib_count = len(libraries) if libraries else 0
+        self.timeout = timeout + (timeout * lib_count)
 
     def _api_connect(self):
+        """
+        Establishes an RPyC connection to the remote Binary Ninja instance.
+        
+        Returns:
+            rpyc.Connection: Active RPyC connection object.
+            
+        Raises:
+            ConnectionError: If connection to the RPyC server fails.
+        """
         try:
             rpyc.core.protocol.DEFAULT_CONFIG["sync_request_timeout"] = self.timeout
             return rpyc.connect(
@@ -595,33 +622,88 @@ class BGInitRpyc(BGInit):
         except (socket.error, EOFError, socket.timeout) as e:
             raise ConnectionError(f"Failed to connect to {self.host}:{self.port} - {e}")
 
+    def _match_imported_functions_to_libraries(self, bv, bn):
+        """
+        Match imported functions to library implementations via RPyC.
+        
+        This method caches library analysis results to speed up subsequent runs.
+        Libraries are loaded through the remote Binary Ninja instance.
+        
+        Args:
+            bv: BinaryView of the target binary (via RPyC).
+            bn: Remote binaryninja module reference (via RPyC).
+            
+        Returns:
+            dict: Mapping of library paths to their BinaryView objects.
+        """
+        self.cache_folder_path = (
+            f"{self._get_user_data_dir()}/bingoggles/{self.cache_folder_name}"
+        )
+        if not os.path.exists(self.cache_folder_path):
+            os.makedirs(self.cache_folder_path, exist_ok=True)
+
+        mapped = {}
+        for lib in self.libraries:
+            cache_file = self._get_cache_filename(lib)
+            if os.path.exists(cache_file):
+                print(f"[INFO] Loading analysis from cache for {lib}")
+                lib_bv = bn.load(os.path.abspath(cache_file))
+                mapped[lib] = lib_bv
+            else:
+                print(f"[INFO] Analyzing and caching {lib}")
+                lib_bv = bn.load(lib)
+                if lib_bv:
+                    lib_bv.create_database(os.path.abspath(cache_file))
+                    mapped[lib] = lib_bv
+
+        return mapped
+
     def init(self):
+        """
+        Initialize the RPyC connection and load the target binary and libraries.
+        
+        Returns:
+            tuple: (BinaryView, dict|None) where the dict maps library paths to BinaryViews,
+                   or None if no libraries were provided.
+        """
         with Progress() as progress:
             task_connect = progress.add_task("[cyan]Connecting to API...", total=1)
             c = self._api_connect()
             progress.update(task_connect, advance=1)
 
-            task_load_bin = progress.add_task("[green]Loading binary...", total=1)
             bn = c.root.binaryninja
-            bv = bn.load(self.target_bin)
+            
+            # Increase timeout specifically for binary loading (especially .bndb files)
+            task_load_bin = progress.add_task(
+                f"[green]Loading binary (timeout: {self.timeout}s)...", 
+                total=1
+            )
+            
+            # Temporarily increase timeout for the load operation
+            old_timeout = rpyc.core.protocol.DEFAULT_CONFIG["sync_request_timeout"]
+            if self.target_bin.endswith('.bndb'):
+                # BNDB files need significantly more time
+                rpyc.core.protocol.DEFAULT_CONFIG["sync_request_timeout"] = self.timeout * 2
+            
+            try:
+                bv = bn.load(self.target_bin)
+            finally:
+                # Restore original timeout
+                rpyc.core.protocol.DEFAULT_CONFIG["sync_request_timeout"] = old_timeout
+            
             progress.update(task_load_bin, advance=1)
 
         imported_functions_mapped = None
 
         if len(self.libraries) > 0:
-            # This is temporary while bingoggles is still in development, long term vision hopefully some of this can be automated
-            answer = input("Load libraries? [y/n]: ")
-            if answer == "" or answer == "n":
-                return bv, None
-            else:
+            with Status("[magenta]Matching imports to libraries...", spinner="dots"):
                 imported_functions_mapped = self._match_imported_functions_to_libraries(
-                    bv
+                    bv, bn
                 )
-                return bv, imported_functions_mapped
 
+            return bv, imported_functions_mapped
         else:
             return bv, None
-
 
 @dataclass
 class TaintedStructMember:
