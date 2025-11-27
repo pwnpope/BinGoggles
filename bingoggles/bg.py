@@ -1646,7 +1646,7 @@ class Analysis:
 
         # Build tainted parameter map: if multiple parameters became tainted during analysis,
         # map the original input parameter to all other parameters it influenced
-        if len(tainted_parameters) > 1:
+        if len(tainted_parameters) > 1 and original_tainted_params:
             original_param = (
                 original_tainted_params[0]
                 if isinstance(original_tainted_params, (list, tuple))
