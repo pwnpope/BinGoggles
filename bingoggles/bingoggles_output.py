@@ -185,6 +185,7 @@ def pretty_print_path_data(path_data: List):
     Uses create_ascii_table for consistent formatting.
     """
     if not path_data:
+        # :TODO implement some logging here to display why there may be no taint data to display
         print("No taint data to display")
         return
 
