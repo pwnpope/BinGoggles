@@ -106,9 +106,6 @@ def get_bndb_path_or_original(file_path: str) -> str:
 
 def test_backwards_slice_var(
     bg_init,
-    # test_bin=get_bndb_path_or_original(
-    #     f"{bingoggles_path}/binaries/bin/test_mlil_store.bndb"
-    # ),
 ):
     test_bin = get_bndb_path_or_original(
         f"{bingoggles_path}/binaries/bin/test_mlil_store.bndb"
@@ -162,12 +159,10 @@ def test_backwards_slice_var(
     print(f"✓ All expected instruction indexes present: {sorted(actual_instr_indexes)}")
 
 
-def test_fwd_slice_param(
-    bg_init,
-    test_bin=get_bndb_path_or_original(
+def test_fwd_slice_param(bg_init):
+    test_bin = get_bndb_path_or_original(
         f"{bingoggles_path}/binaries/bin/test_slices.bndb"
-    ),
-):
+    )
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[],
@@ -226,12 +221,10 @@ def test_fwd_slice_param(
     ), "Missing return instruction"
 
 
-def test_fwd_slice_var(
-    bg_init,
-    test_bin=get_bndb_path_or_original(
+def test_fwd_slice_var(bg_init):
+    test_bin = get_bndb_path_or_original(
         f"{bingoggles_path}/binaries/bin/test_mlil_store.bndb"
-    ),
-):
+    )
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[],
@@ -268,12 +261,10 @@ def test_fwd_slice_var(
     assert not unexpected, f"Unexpected instruction indexes found: {sorted(unexpected)}"
 
 
-def test_get_sliced_calls(
-    bg_init,
-    test_bin=get_bndb_path_or_original(
+def test_get_sliced_calls(bg_init):
+    test_bin = get_bndb_path_or_original(
         f"{bingoggles_path}/binaries/bin/test_get_sliced_calls"
-    ),
-):
+    )
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[],
@@ -297,10 +288,8 @@ def test_get_sliced_calls(
     pprint(result)
 
 
-def test_complete_fwd_slice_var(
-    bg_init,
-    test_bin=get_bndb_path_or_original(f"{bingoggles_path}/binaries/bin/test_uaf.bndb"),
-):
+def test_complete_fwd_slice_var(bg_init):
+    test_bin = get_bndb_path_or_original(f"{bingoggles_path}/binaries/bin/test_uaf.bndb")
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[],
@@ -325,12 +314,10 @@ def test_complete_fwd_slice_var(
     assert not missing, f"Missing expected functions in taint trace: {sorted(missing)}"
 
 
-def test_complete_fwd_slice_param(
-    bg_init,
-    test_bin=get_bndb_path_or_original(
+def test_complete_fwd_slice_param(bg_init):
+    test_bin = get_bndb_path_or_original(
         f"{bingoggles_path}/binaries/bin/test_is_param_tainted.bndb"
-    ),
-):
+    )
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[],
@@ -371,12 +358,10 @@ def test_complete_fwd_slice_param(
     pprint(data)
 
 
-def test_is_param_tainted(
-    bg_init,
-    test_bin=get_bndb_path_or_original(
+def test_is_param_tainted(bg_init):
+    test_bin = get_bndb_path_or_original(
         f"{bingoggles_path}/binaries/bin/test_is_param_tainted.bndb"
-    ),
-):
+    )
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[],
@@ -401,12 +386,10 @@ def test_is_param_tainted(
     print(data)
 
 
-def test_global_tracking_fwd_var(
-    bg_init,
-    test_bin=get_bndb_path_or_original(
+def test_global_tracking_fwd_var(bg_init):
+    test_bin = get_bndb_path_or_original(
         f"{bingoggles_path}/binaries/bin/test_global_tracking"
-    ),
-):
+    )
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[],
@@ -434,10 +417,8 @@ def test_global_tracking_fwd_var(
     ), "glob_buf not in tainted variables"
 
 
-def test_uaf(
-    bg_init,
-    test_bin=get_bndb_path_or_original(f"{bingoggles_path}/binaries/bin/test_uaf"),
-):
+def test_uaf(bg_init):
+    test_bin = get_bndb_path_or_original(f"{bingoggles_path}/binaries/bin/test_uaf")
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[],
@@ -603,12 +584,10 @@ def test_uaf(
             pprint([loc for loc in vulns[0].vulnerable_path_data])
 
 
-def test_load_struct(
-    bg_init,
-    test_bin=get_bndb_path_or_original(
+def test_load_struct(bg_init):
+    test_bin = get_bndb_path_or_original(
         f"{bingoggles_path}/binaries/bin/test_struct_member"
-    ),
-):
+    )
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[],
@@ -627,12 +606,10 @@ def test_load_struct(
     pprint(tainted_vars)
 
 
-def test_set_var_field(
-    bg_init,
-    test_bin=get_bndb_path_or_original(
+def test_set_var_field(bg_init):
+    test_bin = get_bndb_path_or_original(
         f"{bingoggles_path}/binaries/bin/test_struct_member"
-    ),
-):
+    )
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[],
@@ -657,12 +634,10 @@ def test_set_var_field(
         assert expected_indexes.pop(0) == i.loc.instr_index
 
 
-def test_interproc_memcpy(
-    bg_init,
-    test_bin=get_bndb_path_or_original(
+def test_interproc_memcpy(bg_init):
+    test_bin = get_bndb_path_or_original(
         f"{bingoggles_path}/binaries/bin/test_function_param_tainted_memcpy"
-    ),
-):
+    )
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[],
@@ -680,12 +655,10 @@ def test_interproc_memcpy(
     pprint(tainted_vars)
 
 
-def test(
-    bg_init,
-    test_bin=get_bndb_path_or_original(
+def test(bg_init):
+    test_bin = get_bndb_path_or_original(
         f"{bingoggles_path}/binaries/bin/test_interproc_param_tainting.bndb"
-    ),
-):
+    )
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[],
