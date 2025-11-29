@@ -137,16 +137,6 @@ class InterprocHelper:
             function_call_params = call_object.parameter_vars
             zipped_params = list(zip(call_params, function_call_params))
 
-            # Identify sub-function parameters that are tainted by comparing the underlying variable
-            # tainted_sub_params = [
-            #     param[1].name
-            #     for param in zipped_params
-            #     if any(
-            #         tv.variable == param[0].ssa_form.var
-            #         for tv in tainted_variables
-            #         if tv is not None
-            #     )
-            # ]
             var_mapping = {
                 cp.ssa_form.var: callee_param
                 for (cp, callee_param) in zipped_params
@@ -267,8 +257,9 @@ class InterprocHelper:
 
         if verbose:
             print(
-                f"[{Fore.GREEN}INFO{Fore.RESET}] Analyzing sub-function call: {call_data.call_object} for tainted parameters"
+                f"[{Fore.GREEN}INFO{Fore.RESET}] Analyzing sub-function call: {call_data.call_object.name} @ {loc.address:#x}"
             )
+            print(f"  [DEBUG] Tainted arguments passed: {call_data.tainted_sub_params}")
 
         list_ipc_data = self.gather_interproc_data(
             loc, function_node, analysis, call_data
@@ -276,19 +267,14 @@ class InterprocHelper:
 
         for ipc_data in list_ipc_data:
             if ipc_data and isinstance(ipc_data, InterprocTaintResult):
-                # Map back the tainted sub-function parameters to the current function's variables
-                # tainted_sub_variables = [
-                #     param[0].ssa_form.var
-                #     for param in call_data.zipped_params
-                #     if param[1].name in ipc_data.tainted_param_names
-                # ]
-                # Map back the tainted sub-function parameters to the current function's variables,
-                # but only if they are tainted by the selected seeds.
+                # Build mapping from caller args to callee params
                 var_mapping = {
                     cp.ssa_form.var: callee_param
                     for (cp, callee_param) in call_data.zipped_params
                     if hasattr(cp, "ssa_form")
                 }
+                
+                # Track which callee parameters got tainted and map back to caller variables
                 tainted_sub_variables = []
                 for cp, callee_param in call_data.zipped_params:
                     if callee_param.name not in ipc_data.tainted_param_names:
@@ -298,14 +284,56 @@ class InterprocHelper:
                     ):
                         tainted_sub_variables.append(cp.ssa_form.var)
 
+                # Propagate taint back to caller's variables
                 for sub_var in tainted_sub_variables:
                     append_bingoggles_var_by_type(
                         sub_var, tainted_variables, loc, analysis
                     )
 
+                # **NEW: Update tainted_param_map with interprocedural relationships**
+                if ipc_data.tainted_param_map and self.original_tainted_params:
+                    if verbose:
+                        print(f"  Callee's tainted_param_map: {ipc_data.tainted_param_map}")
+                    
+                    # For each parameter relationship in the callee
+                    for callee_source, callee_tainted_list in ipc_data.tainted_param_map.items():
+                        # Find which caller argument maps to this callee source parameter
+                        caller_arg = None
+                        for cp, callee_param in call_data.zipped_params:
+                            if callee_param.name == callee_source.name:
+                                # Get the underlying variable from the caller's argument
+                                caller_arg = cp.ssa_form.var if hasattr(cp, "ssa_form") else cp
+                                break
+                        
+                        if caller_arg:
+                            # Check if this caller arg traces back to our original tainted params
+                            for orig_param in self.original_tainted_params:
+                                orig_var = getattr(orig_param, "var", orig_param)
+                                caller_var = getattr(caller_arg, "var", caller_arg)
+                                
+                                if orig_var.name == caller_var.name:
+                                    # Map the original param to the other tainted params from the callee
+                                    if orig_param not in self.tainted_param_map:
+                                        self.tainted_param_map[orig_param] = []
+                                    
+                                    # Add the other parameters that got tainted in the callee
+                                    for callee_tainted in callee_tainted_list:
+                                        # Find the caller arg that corresponds to this tainted callee param
+                                        for cp2, callee_param2 in call_data.zipped_params:
+                                            if callee_param2.name == callee_tainted.name:
+                                                caller_tainted = cp2.ssa_form.var if hasattr(cp2, "ssa_form") else cp2
+                                                if caller_tainted not in self.tainted_param_map[orig_param]:
+                                                    self.tainted_param_map[orig_param].append(caller_tainted)
+                                                    if verbose:
+                                                        print(f"  → Mapped {orig_param.name} → {caller_tainted.name} (via {call_data.call_object.name})")
+                                                break
+
+                # Handle tainted return value
                 if ipc_data.is_return_tainted:
                     if loc.vars_written:
                         var = loc.vars_written[0]
+                        if verbose:
+                            print(f"  Return value tainted: {getattr(var, 'name', str(var))}")
                         append_bingoggles_var_by_type(
                             var, tainted_variables, loc, analysis
                         )
@@ -328,6 +356,97 @@ class InterprocHelper:
                         append_bingoggles_var_by_type(
                             var, tainted_variables, loc, analysis
                         )
+    # def handle_mlil_call_ssa(
+    #     self,
+    #     function_node: Function,
+    #     analysis,
+    #     tainted_variables: set,
+    #     verbose: bool,
+    #     loc,
+    # ) -> None:
+    #     """
+    #     Handle MLIL_CALL_SSA instructions, propagating taint through function calls.
+
+    #     Args:
+    #         function_node (Function): The current function node.
+    #         analysis: The Analysis object.
+    #         tainted_variables (set): Set of currently tainted variables.
+    #         verbose (bool): Whether to print verbose output.
+    #         loc: The MLIL instruction location.
+
+    #     Returns:
+    #         None
+    #     """
+    #     call_data = self.gather_mlil_call_data(loc, tainted_variables)
+    #     if call_data is None:
+    #         return
+
+    #     if not call_data.call_object:
+    #         return
+
+    #     if verbose:
+    #         print(
+    #             f"[{Fore.GREEN}INFO{Fore.RESET}] Analyzing sub-function call: {call_data.call_object} for tainted parameters"
+    #         )
+
+    #     list_ipc_data = self.gather_interproc_data(
+    #         loc, function_node, analysis, call_data
+    #     )
+
+    #     for ipc_data in list_ipc_data:
+    #         if ipc_data and isinstance(ipc_data, InterprocTaintResult):
+    #             # Map back the tainted sub-function parameters to the current function's variables
+    #             # tainted_sub_variables = [
+    #             #     param[0].ssa_form.var
+    #             #     for param in call_data.zipped_params
+    #             #     if param[1].name in ipc_data.tainted_param_names
+    #             # ]
+    #             # Map back the tainted sub-function parameters to the current function's variables,
+    #             # but only if they are tainted by the selected seeds.
+    #             var_mapping = {
+    #                 cp.ssa_form.var: callee_param
+    #                 for (cp, callee_param) in call_data.zipped_params
+    #                 if hasattr(cp, "ssa_form")
+    #             }
+    #             tainted_sub_variables = []
+    #             for cp, callee_param in call_data.zipped_params:
+    #                 if callee_param.name not in ipc_data.tainted_param_names:
+    #                     continue
+    #                 if InterprocHelper.does_variable_taint_param(
+    #                     self.original_tainted_params, callee_param, var_mapping
+    #                 ):
+    #                     tainted_sub_variables.append(cp.ssa_form.var)
+
+    #             for sub_var in tainted_sub_variables:
+    #                 append_bingoggles_var_by_type(
+    #                     sub_var, tainted_variables, loc, analysis
+    #                 )
+
+    #             if ipc_data.is_return_tainted:
+    #                 if loc.vars_written:
+    #                     var = loc.vars_written[0]
+    #                     append_bingoggles_var_by_type(
+    #                         var, tainted_variables, loc, analysis
+    #                     )
+
+    #         elif ipc_data and isinstance(ipc_data, FunctionModel):
+    #             tainted_sub_variables = [
+    #                 call_data.zipped_params[i][0].ssa_form.var
+    #                 for i in ipc_data.taint_destinations
+    #                 if i < len(call_data.zipped_params)
+    #             ]
+
+    #             for sub_var in tainted_sub_variables:
+    #                 append_bingoggles_var_by_type(
+    #                     sub_var, tainted_variables, loc, analysis
+    #                 )
+
+    #             if ipc_data.taints_return:
+    #                 if loc.vars_written:
+    #                     var = loc.vars_written[0]
+    #                     append_bingoggles_var_by_type(
+    #                         var, tainted_variables, loc, analysis
+    #                     )
 
     def mlil_handler(
         self, analysis, loc, tainted_variables: set, function_node: Function, verbose
@@ -362,8 +481,17 @@ class InterprocHelper:
                 ...
 
             case MediumLevelILOperation.MLIL_SET_VAR_SSA.value:
-                var = loc.vars_written[0]
-                append_bingoggles_var_by_type(var, tainted_variables, loc, analysis)
+                # var = loc.vars_written[0]
+                # append_bingoggles_var_by_type(var, tainted_variables, loc, analysis)
+                # Only taint if the source reads a tainted variable
+                if any(
+                    variables_match(tv.variable, read_var)
+                    for tv in tainted_variables
+                    for read_var in loc.vars_read
+                    if tv is not None
+                ):
+                    var = loc.vars_written[0]
+                    append_bingoggles_var_by_type(var, tainted_variables, loc, analysis)
 
             case MediumLevelILOperation.MLIL_CALL_SSA.value:
                 self.handle_mlil_call_ssa(
@@ -371,9 +499,18 @@ class InterprocHelper:
                 )
 
             case MediumLevelILOperation.MLIL_SET_VAR_SSA_FIELD.value:
-                tainted_variables.add(
-                    TaintedVar(loc.dest, TaintConfidence.Tainted, loc.address)
-                )
+                # tainted_variables.add(
+                #     TaintedVar(loc.dest, TaintConfidence.Tainted, loc.address)
+                # )
+                if any(
+                    variables_match(tv.variable, read_var)
+                    for tv in tainted_variables
+                    for read_var in loc.vars_read
+                    if tv is not None
+                ):
+                    tainted_variables.add(
+                        TaintedVar(loc.dest, TaintConfidence.Tainted, loc.address)
+                    )
 
             case _:
                 if loc.operation in [
@@ -433,28 +570,75 @@ class InterprocHelper:
         )
         for mlil_loc in all_mlil_locs:
             loc = mlil_loc.ssa_form
-            self.mlil_handler(analysis, loc, tainted_variables, function_node, verbose)
-
-            # Map variables written to the variables read in the current instruction
-            for var_assignment in loc.vars_written:
-                variable_mapping[var_assignment] = loc.vars_read
-
-            # If any read variable is tainted, mark the written variables as tainted
+            
+            # Clean up tainted_variables before processing
             tainted_variables.update([t for t in tainted_variables if t])
             if None in tainted_variables:
                 tainted_variables.discard(None)
+            
+            # Let mlil_handler do the taint propagation based on operation semantics
+            self.mlil_handler(analysis, loc, tainted_variables, function_node, verbose)
 
-            # Check if any read variable matches any tainted variable
-            if any(
-                variables_match(tv.variable, read_var)
-                for tv in tainted_variables
-                for read_var in loc.vars_read
-                if tv is not None
-            ):
-                for var in loc.vars_written:
-                    append_bingoggles_var_by_type(
-                        var, tainted_variables, loc, self.analysis
-                    )
+            # Map variables written to the variables read in the current instruction
+            # This is for later analysis to understand data flow, not for taint propagation
+            for var_assignment in loc.vars_written:
+                variable_mapping[var_assignment] = loc.vars_read
+
+        # all_mlil_locs = (
+        #     mlil_loc for block in function_node.medium_level_il for mlil_loc in block
+        # )
+        # for mlil_loc in all_mlil_locs:
+        #     loc = mlil_loc.ssa_form
+        #     self.mlil_handler(analysis, loc, tainted_variables, function_node, verbose)
+
+        #     # Map variables written to the variables read in the current instruction
+        #     for var_assignment in loc.vars_written:
+        #         variable_mapping[var_assignment] = loc.vars_read
+
+        #     # If any read variable is tainted, mark the written variables as tainted
+        #     tainted_variables.update([t for t in tainted_variables if t])
+        #     if None in tainted_variables:
+        #         tainted_variables.discard(None)
+
+        #     # Check if any read variable matches any tainted variable
+        #     if any(
+        #         variables_match(tv.variable, read_var)
+        #         for tv in tainted_variables
+        #         for read_var in loc.vars_read
+        #         if tv is not None
+        #     ):
+        #         for var in loc.vars_written:
+        #             append_bingoggles_var_by_type(
+        #                 var, tainted_variables, loc, self.analysis
+        #             )
+
+        # all_mlil_locs = (
+        #     mlil_loc for block in function_node.medium_level_il for mlil_loc in block
+        # )
+        # for mlil_loc in all_mlil_locs:
+        #     loc = mlil_loc.ssa_form
+        #     self.mlil_handler(analysis, loc, tainted_variables, function_node, verbose)
+
+        #     # Map variables written to the variables read in the current instruction
+        #     for var_assignment in loc.vars_written:
+        #         variable_mapping[var_assignment] = loc.vars_read
+
+        #     # If any read variable is tainted, mark the written variables as tainted
+        #     tainted_variables.update([t for t in tainted_variables if t])
+        #     if None in tainted_variables:
+        #         tainted_variables.discard(None)
+
+        #     # Check if any read variable matches any tainted variable
+        #     if any(
+        #         variables_match(tv.variable, read_var)
+        #         for tv in tainted_variables
+        #         for read_var in loc.vars_read
+        #         if tv is not None
+        #     ):
+        #         for var in loc.vars_written:
+        #             append_bingoggles_var_by_type(
+        #                 var, tainted_variables, loc, self.analysis
+        #             )
 
     def print_banner_interproc_banner(
         self,

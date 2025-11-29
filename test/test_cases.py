@@ -667,7 +667,7 @@ def test(bg_init):
 
     aux = Analysis(binaryview=bv, verbose=False, libraries_mapped=libraries_mapped)
     results = aux.trace_function_taint(
-        function_node=0x00401A38, tainted_params=("temp_array"), binary_view=bv
+        function_node="process_data", tainted_params=("final_array"), binary_view=bv
     )
 
     pprint(results)
