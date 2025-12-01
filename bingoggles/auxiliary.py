@@ -8,6 +8,7 @@ from binaryninja.mediumlevelil import (
     MediumLevelILConst,
     MediumLevelILAddressOf,
     MediumLevelILVarSsa,
+    MediumLevelILVarPhi
 )
 from binaryninja.highlevelil import HighLevelILOperation, HighLevelILInstruction
 from colorama import Fore
@@ -2258,6 +2259,7 @@ def propagate_mlil_call(
     if decision in [TraceDecision.PROCESS_AND_TRACE, TraceDecision.SKIP_AND_PROCESS]:
         if mlil_loc.params:
             imported_function = analysis.resolve_function_type(mlil_loc)
+            # If it's in the modeled function "DB" then we'll use this
             normalized_function_name = get_modeled_function_name_at_callsite(
                 function_node, mlil_loc
             )
@@ -2274,6 +2276,7 @@ def propagate_mlil_call(
                 )
 
             elif not normalized_function_name and not imported_function:
+                # Auto resolution of un-resolved GOT function calls.
                 resolved_function_object = resolve_got_callsite(
                     function_node.view, mlil_loc.dest.value.value
                 )
@@ -2283,6 +2286,7 @@ def propagate_mlil_call(
                         resolved_function_object.name, var_to_trace, mlil_loc
                     )
 
+                # Else case for functions we haven't previously modeled
                 else:
                     _, tainted_func_param = get_func_param_from_call_param(
                         analysis.bv, mlil_loc, var_to_trace
@@ -2319,7 +2323,7 @@ def propagate_mlil_call(
                     )
                 )
 
-                for tainted_function_param, call_param in zipped_results:
+                for _tainted_function_param, call_param in zipped_results:
                     # Wrap each tainted parameter into the appropriate BinGoggles taint type
                     append_bingoggles_var_by_type(
                         call_param, vars_found, mlil_loc, analysis, var_to_trace
@@ -2958,6 +2962,7 @@ def get_const_ptr_from_loc(glob_var_value: int, loc: MediumLevelILInstruction):
             return op
 
 
+
 def get_use_sites(
     loc: MediumLevelILInstruction,
     var: Union[MediumLevelILVar, MediumLevelILVarSsa, SSAVariable, Variable],
@@ -2965,11 +2970,9 @@ def get_use_sites(
 ) -> Optional[list]:
     """
     Retrieve the use sites of a specific variable within a given MLIL instruction.
-
     Args:
         loc (MediumLevelILInstruction): The MLIL instruction to inspect.
         var (Union[MediumLevelILVar, MediumLevelILVarSsa, SSAVariable, Variable]): The variable whose use sites are to be found.
-
     Returns:
         list | None: The use sites of the variable if found in the instruction, otherwise None.
     """
@@ -2986,39 +2989,240 @@ def get_use_sites(
             func = addr_to_func(analysis.bv, loc.address)
             return get_mlil_glob_refs(analysis, func, tg) if func else None
 
-    match_vars: set = set()
+    function_node = None
+    loc_function = getattr(loc, "function", None)
+    if loc_function is not None:
+        function_node = getattr(loc_function, "source_function", None) or loc_function
+    if function_node is None:
+        function_node = addr_to_func(analysis.bv, loc.address)
 
-    if isinstance(var, (MediumLevelILVar, MediumLevelILVarSsa)):
-        var = var.var
+    match_vars: set[Variable] = set()
+    match_ssa_tokens: set[str] = set()
+    candidate_objects: set = set()
 
-    if isinstance(var, Variable):
-        match_vars.add(var)
-    elif isinstance(var, SSAVariable):
-        match_vars.add(var.var)
-    elif hasattr(var, "vars_read") and var.vars_read:
+    def add_candidate(candidate):
+        if candidate is None:
+            return
+        candidate_objects.add(candidate)
+        base_var = None
+
+        if isinstance(candidate, MediumLevelILVarPhi):
+            add_candidate(candidate.dest)
+            for src in candidate.src:
+                add_candidate(src)
+            return
+        if isinstance(candidate, (MediumLevelILVar, MediumLevelILVarSsa)):
+            base_var = candidate.var
+        elif isinstance(candidate, SSAVariable):
+            base_var = candidate.var
+        elif isinstance(candidate, Variable):
+            base_var = candidate
+        elif hasattr(candidate, "variable") and isinstance(candidate.variable, Variable):
+            base_var = candidate.variable
+
+        if base_var:
+            match_vars.add(base_var)
+
+        if isinstance(candidate, (MediumLevelILVarSsa, SSAVariable)):
+            match_ssa_tokens.add(str(candidate))
+
+    add_candidate(var)
+    if hasattr(var, "variable"):
+        add_candidate(getattr(var, "variable"))
+    if hasattr(var, "vars_read") and var.vars_read:
         for vr in var.vars_read:
-            match_vars.add(getattr(vr, "var", vr))
+            add_candidate(vr)
 
-    vars_in_loc = []
-    if hasattr(loc, "vars_written"):
-        vars_in_loc.extend(loc.vars_written)
-    if hasattr(loc, "vars_read"):
-        vars_in_loc.extend(loc.vars_read)
+    if not match_vars and not match_ssa_tokens:
+        return None
 
-    combined: list = []
+    combined: list[MediumLevelILInstruction] = []
     seen = set()
-    for v in vars_in_loc:
-        vv = getattr(v, "var", v)
-        if vv in match_vars:
-            use_sites = getattr(v, "use_sites", None)
-            if use_sites:
-                for us in use_sites:
-                    key = getattr(us, "address", id(us))
-                    if key not in seen:
-                        combined.append(us)
-                        seen.add(key)
 
-    return combined or None
+    def record_use_site(instr):
+        if instr is None:
+            return
+        key = (
+            id(getattr(instr, "function", None)),
+            getattr(instr, "address", None),
+            getattr(instr, "instr_index", None),
+        )
+        if key not in seen:
+            combined.append(instr)
+            seen.add(key)
+
+    for candidate in candidate_objects:
+        use_sites = getattr(candidate, "use_sites", None)
+        if use_sites:
+            for us in use_sites:
+                record_use_site(us)
+
+    def matches_candidate(candidate) -> bool:
+        if candidate is None:
+            return False
+        if isinstance(candidate, MediumLevelILVarPhi):
+            if matches_candidate(candidate.dest):
+                return True
+            return any(matches_candidate(src) for src in candidate.src)
+        base = getattr(candidate, "var", candidate)
+        if base in match_vars:
+            return True
+        if match_ssa_tokens and str(candidate) in match_ssa_tokens:
+            return True
+        return False
+
+    def node_contains_candidate(node) -> bool:
+        if node is None:
+            return False
+        if matches_candidate(node):
+            return True
+        vars_read = getattr(node, "vars_read", None)
+        if vars_read and any(matches_candidate(inner) for inner in vars_read):
+            return True
+        operands = getattr(node, "operands", None)
+        if not operands:
+            return False
+        for operand in operands:
+            if isinstance(operand, list):
+                if any(node_contains_candidate(sub) for sub in operand):
+                    return True
+            else:
+                if node_contains_candidate(operand):
+                    return True
+        return False
+
+    def instruction_references_candidate(instr) -> bool:
+        def seq_matches(seq):
+            return seq and any(matches_candidate(item) for item in seq)
+
+        if seq_matches(getattr(instr, "vars_read", None)):
+            return True
+        if seq_matches(getattr(instr, "vars_written", None)):
+            return True
+
+        params = getattr(instr, "params", None)
+        if params and any(node_contains_candidate(param) for param in params):
+            return True
+
+        operands = getattr(instr, "operands", None)
+        if operands:
+            for operand in operands:
+                if isinstance(operand, list):
+                    if any(node_contains_candidate(sub) for sub in operand):
+                        return True
+                elif node_contains_candidate(operand):
+                    return True
+        return False
+
+    def scan_function_for_matches():
+        if not function_node or not hasattr(function_node, "mlil"):
+            return
+
+        mlil_root = (
+            function_node.mlil.ssa_form
+            if match_ssa_tokens and getattr(function_node.mlil, "ssa_form", None)
+            else function_node.mlil
+        )
+        if mlil_root is None:
+            return
+
+        for block in mlil_root:
+            for instr in block:
+                if instr is None:
+                    continue
+                if instruction_references_candidate(instr):
+                    record_use_site(instr)
+
+    if function_node and (match_ssa_tokens or not combined):
+        scan_function_for_matches()
+
+    if not combined:
+        return None
+
+    combined.sort(
+        key=lambda instr: (
+            getattr(instr, "address", 0),
+            getattr(instr, "instr_index", -1),
+        )
+    )
+    print(combined)
+    return combined
+
+#     loc: MediumLevelILInstruction,
+#     var: Union[MediumLevelILVar, MediumLevelILVarSsa, SSAVariable, Variable],
+#     analysis,
+# ) -> Optional[list]:
+#     """
+#     Retrieve the use sites of a specific variable within a given MLIL instruction.
+
+#     Args:
+#         loc (MediumLevelILInstruction): The MLIL instruction to inspect.
+#         var (Union[MediumLevelILVar, MediumLevelILVarSsa, SSAVariable, Variable]): The variable whose use sites are to be found.
+
+#     Returns:
+#         list | None: The use sites of the variable if found in the instruction, otherwise None.
+#     """
+#     if isinstance(var, MediumLevelILConstPtr):
+#         glob_symbol = get_symbol_from_const_ptr(analysis.bv, var)
+#         if glob_symbol:
+#             tg = TaintedGlobal(
+#                 glob_symbol.name,
+#                 TaintConfidence.MaybeTainted,
+#                 loc.address,
+#                 var,
+#                 glob_symbol,
+#             )
+#             func = addr_to_func(analysis.bv, loc.address)
+#             return get_mlil_glob_refs(analysis, func, tg) if func else None
+
+#     match_vars: set = set()
+
+#     if isinstance(var, (MediumLevelILVar, MediumLevelILVarSsa)):
+#         var = var.var
+
+#     if isinstance(var, Variable):
+#         match_vars.add(var)
+#     elif isinstance(var, SSAVariable):
+#         match_vars.add(var.var)
+#     elif hasattr(var, "vars_read") and var.vars_read:
+#         for vr in var.vars_read:
+#             match_vars.add(getattr(vr, "var", vr))
+
+#     vars_in_loc = []
+#     if hasattr(loc, "vars_written"):
+#         vars_in_loc.extend(loc.vars_written)
+#     if hasattr(loc, "vars_read"):
+#         vars_in_loc.extend(loc.vars_read)
+
+#     combined: list = []
+#     seen = set()
+
+#     # for v in vars_in_loc:
+#     #     vv = getattr(v, "var", v)
+#     #     if vv in match_vars:
+#     #         use_sites = getattr(v, "use_sites", None)
+#     #         if use_sites:
+#     #             for us in use_sites:
+#     #                 key = getattr(us, "address", id(us))
+#     #                 if key not in seen:
+#     #                     combined.append(us)
+#     #                     seen.add(key)
+#     for v in vars_in_loc:
+#         vv = getattr(v, "var", v)
+#         if vv in match_vars:
+#             use_sites = getattr(v, "use_sites", None)
+#             if use_sites:
+#                 for us in use_sites:
+#                     key = (
+#                         getattr(us, "address", id(us)),
+#                         getattr(us, "instr_index", None),
+#                     )
+#                     if key not in seen:
+#                         combined.append(us)
+#                         seen.add(key)
+
+
+#     return combined or None
 
 
 def tainted_param_in_model_sources(
