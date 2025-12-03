@@ -25,6 +25,7 @@ class TaintConfidence:
     - MaybeTainted (0.5): The variable might be tainted.
     - NotTainted (0.0): The variable is known to be clean.
     """
+
     Tainted = 1.0
     MaybeTainted = 0.5
     NotTainted = 0.0
@@ -269,12 +270,8 @@ class TaintedVar:
         loc_address: int,
     ):
         self.variable: Variable = variable
-        self.confidence_level: TaintConfidence = (
-            confidence_level
-        )
-        self.loc_address: int = (
-            loc_address
-        )
+        self.confidence_level: TaintConfidence = confidence_level
+        self.loc_address: int = loc_address
 
     def __eq__(self, other):
         if not isinstance(other, TaintedVar):
@@ -312,6 +309,7 @@ class SliceType:
         Forward (int): Forward slicing (from source to sink).
         Backward (int): Backward slicing (from sink to source).
     """
+
     Forward = 0x0
     Backward = 0x1
 
@@ -326,6 +324,7 @@ class SlicingID:
         GlobalVar (int): A global variable symbol.
         StructMember (int): A member of a struct.
     """
+
     FunctionVar = 0x10
     FunctionParam = 0x20
     GlobalVar = 0x30
@@ -370,6 +369,7 @@ class TaintedVarOffset:
         loc_address (int):
             Address of the MLIL instruction that produced this reference.
     """
+
     def __init__(
         self,
         variable: Variable,
@@ -467,6 +467,7 @@ class BGInit:
         - init() loads the Binary Ninja BinaryView for target_bin and returns (bv, libraries_mapped).
         - When libraries are provided, matching/caching occurs.
     """
+
     def __init__(self, target_bin: str, libraries: list = None):
         if libraries is None:
             libraries = []
@@ -567,7 +568,7 @@ class BGInitRpyc(BGInit):
     is adjusted based on the number of libraries provided. Additionally, it handles the setup
     of the BinGoggles state for performing binary analysis, caching results, and loading the
     necessary libraries.
-    
+
     Parameters:
         target_bin (str): Absolute or relative path to the target binary to analyze.
         libraries (list[str] | None): Optional list of library paths to preload and cache
@@ -575,7 +576,7 @@ class BGInitRpyc(BGInit):
         host (str): RPyC server host address (default: "127.0.0.1").
         port (int): RPyC server port (default: 18812).
         timeout (int): Base timeout in seconds for RPyC operations (default: 600).
-        
+
     Attributes:
         host (str): RPyC server host.
         port (int): RPyC server port.
@@ -605,10 +606,10 @@ class BGInitRpyc(BGInit):
     def _api_connect(self):
         """
         Establishes an RPyC connection to the remote Binary Ninja instance.
-        
+
         Returns:
             rpyc.Connection: Active RPyC connection object.
-            
+
         Raises:
             ConnectionError: If connection to the RPyC server fails.
         """
@@ -625,14 +626,14 @@ class BGInitRpyc(BGInit):
     def _match_imported_functions_to_libraries(self, bv, bn):
         """
         Match imported functions to library implementations via RPyC.
-        
+
         This method caches library analysis results to speed up subsequent runs.
         Libraries are loaded through the remote Binary Ninja instance.
-        
+
         Args:
             bv: BinaryView of the target binary (via RPyC).
             bn: Remote binaryninja module reference (via RPyC).
-            
+
         Returns:
             dict: Mapping of library paths to their BinaryView objects.
         """
@@ -661,7 +662,7 @@ class BGInitRpyc(BGInit):
     def init(self):
         """
         Initialize the RPyC connection and load the target binary and libraries.
-        
+
         Returns:
             tuple: (BinaryView, dict|None) where the dict maps library paths to BinaryViews,
                    or None if no libraries were provided.
@@ -672,25 +673,26 @@ class BGInitRpyc(BGInit):
             progress.update(task_connect, advance=1)
 
             bn = c.root.binaryninja
-            
+
             # Increase timeout specifically for binary loading (especially .bndb files)
             task_load_bin = progress.add_task(
-                f"[green]Loading binary (timeout: {self.timeout}s)...", 
-                total=1
+                f"[green]Loading binary (timeout: {self.timeout}s)...", total=1
             )
-            
+
             # Temporarily increase timeout for the load operation
             old_timeout = rpyc.core.protocol.DEFAULT_CONFIG["sync_request_timeout"]
-            if self.target_bin.endswith('.bndb'):
+            if self.target_bin.endswith(".bndb"):
                 # BNDB files need significantly more time
-                rpyc.core.protocol.DEFAULT_CONFIG["sync_request_timeout"] = self.timeout * 2
-            
+                rpyc.core.protocol.DEFAULT_CONFIG["sync_request_timeout"] = (
+                    self.timeout * 2
+                )
+
             try:
                 bv = bn.load(self.target_bin)
             finally:
                 # Restore original timeout
                 rpyc.core.protocol.DEFAULT_CONFIG["sync_request_timeout"] = old_timeout
-            
+
             progress.update(task_load_bin, advance=1)
 
         imported_functions_mapped = None
@@ -704,6 +706,7 @@ class BGInitRpyc(BGInit):
             return bv, imported_functions_mapped
         else:
             return bv, None
+
 
 @dataclass
 class TaintedStructMember:
@@ -721,6 +724,7 @@ class TaintedStructMember:
         variable (Variable): MLIL base variable backing the struct storage.
         confidence_level (TaintConfidence): Confidence assigned to this tainted field access.
     """
+
     def __init__(
         self,
         loc_address: int,
