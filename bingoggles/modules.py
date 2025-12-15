@@ -3,7 +3,8 @@ from binaryninja.mediumlevelil import MediumLevelILVar, MediumLevelILConst
 from binaryninja import BinaryView
 from bingoggles.auxiliary import func_name_to_object
 from bingoggles.bingoggles_types import *
-from typing import Union
+from bingoggles.function_registry import ret_with_common_prefixes
+from typing import Optional
 
 
 class UseAfterFreeDetection:
@@ -48,8 +49,31 @@ class UseAfterFreeDetection:
         """
         self.bv = bv
         self.slice_data = slice_data
-        self.alloc_functions = ["malloc", "new", "realloc", "calloc"]
-        self.dealloc_functions = ["free", "delete", "realloc"]
+        # Base alloc/dealloc names (unprefixed)
+        base_alloc_funcs = [
+            "malloc",
+            "new",
+            "realloc",
+            "calloc",
+        ]
+        base_dealloc_funcs = [
+            "free",
+            "delete",
+            "realloc",
+        ]
+
+        # Expand with common prefixes without mutating the list during iteration
+        # and using full function names (not single-character slices).
+        alloc_set = set()
+        for func in base_alloc_funcs:
+            alloc_set.update(ret_with_common_prefixes(func))
+        self.alloc_functions = list(alloc_set)
+
+        dealloc_set = set()
+        for func in base_dealloc_funcs:
+            dealloc_set.update(ret_with_common_prefixes(func))
+        self.dealloc_functions = list(dealloc_set)
+
         if self.slice_data:
             self.combined_tainted_vars_path = [
                 var.variable
@@ -63,7 +87,7 @@ class UseAfterFreeDetection:
             flattened.extend(locs)
         return sorted(flattened, key=lambda x: x.addr)
 
-    def analyzer(self, parent_function_name=None) -> Union[VulnReport, None]:
+    def analyzer(self, parent_function_name=None) -> list[VulnReport]:
         """
         Analyze sliced data to detect potential Use-After-Free (UAF) vulnerabilities.
 
@@ -78,9 +102,9 @@ class UseAfterFreeDetection:
                 the function name is inferred from the tainted slice.
 
         Returns:
-            VulnReport | None:
+            list[VulnReport]:
                 A list of `VulnReport` objects, each representing a detected UAF path.
-                Returns None if no vulnerabilities are found.
+                Returns an empty list if no vulnerabilities are found.
 
         Notes:
             - This is the main entry point for UAF detection logic.
@@ -88,10 +112,15 @@ class UseAfterFreeDetection:
             - Each `VulnReport` contains a traceable path of `TaintedLOC` instances indicating
               where a freed variable was subsequently accessed.
         """
-
         if not self.slice_data:
             raise ValueError(
                 "slice_data must be provided in order to run this function"
+            )
+
+        print(f"[UAF DEBUG] Analyzing {len(self.slice_data)} slice entries")
+        for key, (path_data, tainted_vars) in self.slice_data.items():
+            print(
+                f"[UAF DEBUG] Key: {key}, path_data entries: {len(path_data)}, tainted_vars: {len(tainted_vars)}"
             )
 
         use_after_frees_detected = {}
@@ -105,17 +134,31 @@ class UseAfterFreeDetection:
             if not parent_function_name:
                 parent_function_name = tainted_func_name
 
+            print(
+                f"[UAF DEBUG] Processing function {tainted_func_name}, var/param: {tanited_var_or_param}"
+            )
+            print(f"[UAF DEBUG] Path has {len(path_data)} locations")
+
+            call_count = 0
             for t_loc in path_data:
                 if t_loc.loc.operation.value != MediumLevelILOperation.MLIL_CALL.value:
                     continue
 
+                call_count += 1
                 try:
                     func_obj = self.bv.get_functions_containing(
                         t_loc.loc.dest.value.value
                     )[0]
 
                 except IndexError:
+                    print(
+                        f"[UAF DEBUG] Call #{call_count}: Could not resolve function at {hex(t_loc.addr)}"
+                    )
                     continue
+
+                print(
+                    f"[UAF DEBUG] Call #{call_count}: {func_obj.name} at {hex(t_loc.addr)}"
+                )
 
                 if func_obj.name in self.dealloc_functions:
                     dealloc_callsite = t_loc
@@ -127,9 +170,14 @@ class UseAfterFreeDetection:
                     continue
 
                 #:DEBUG
-                # print(f"[UAF CHECK] Dealloc callsite addr: {hex(dealloc_callsite.addr)} (calls {func_obj.name})")
+                print(
+                    f"[UAF CHECK] Dealloc callsite addr: {hex(dealloc_callsite.addr)} (calls {func_obj.name})"
+                )
 
                 if dealloc_callsite:
+                    print(
+                        f"[UAF CHECK] Calling _detect_uaf for dealloc at {hex(dealloc_callsite.addr)}"
+                    )
                     vuln_path = self._detect_uaf(
                         parent_function_name=parent_function_name,
                         path_data=self._flatten_path_data(),
@@ -138,8 +186,17 @@ class UseAfterFreeDetection:
                     )
 
                     if vuln_path:
+                        print(
+                            f"[UAF CHECK] Found vulnerable path with {len(vuln_path)} locations"
+                        )
                         use_after_frees_detected[count] = vuln_path
                         count += 1
+                    else:
+                        print(f"[UAF CHECK] No vulnerable path found (empty vuln_path)")
+
+        print(
+            f"[UAF DEBUG] Analysis complete. Found {len(use_after_frees_detected)} UAF vulnerabilities"
+        )
 
         if len(use_after_frees_detected) > 0:
             vulnerability_reports = []
@@ -152,9 +209,11 @@ class UseAfterFreeDetection:
             return vulnerability_reports
 
         else:
-            return None
+            return []
 
-    def _calls_function_that_frees(self, func_name) -> bool:
+    def _calls_function_that_frees(
+        self, func_name, visited: Optional[set[str]] = None
+    ) -> bool:
         """
         Recursively determine if the given function (or any function it calls) performs a deallocation.
 
@@ -173,6 +232,15 @@ class UseAfterFreeDetection:
             - Updates `self.dealloc_functions` dynamically if new deallocation functions are discovered.
             - Prevents infinite recursion by not re-analyzing the same function name in direct cycles.
         """
+        if visited is None:
+            visited = set()
+
+        # Prevent cycles
+        if func_name in visited:
+            return False
+
+        visited.add(func_name)
+
         fn = func_name_to_object(self.bv, func_name)
         if not fn:
             return False
@@ -187,35 +255,27 @@ class UseAfterFreeDetection:
                 except IndexError:
                     continue
 
-                #:DEBUG
-                # print("========== TAINTED VARS ==========")
-                # pprint(self.combined_tainted_vars_path)
-
-                # print("========== LOC PARAMS ============")
-                # pprint(loc.params)
-
+                # Direct deallocation match
                 if subfn.name in self.dealloc_functions:
                     for param in loc.params:
                         if isinstance(param, MediumLevelILVar):
                             param = param.src
 
                         if param in self.combined_tainted_vars_path:
-                            self.dealloc_functions.append(subfn.name)
-                            #:DEBUG
-                            # print(f"Found a call to {subfn.name} that frees a buffer")
+                            if subfn.name not in self.dealloc_functions:
+                                self.dealloc_functions.append(subfn.name)
                             return True
 
-                if subfn.name != func_name:
-                    if self._calls_function_that_frees(subfn.name):
-                        for param in loc.params:
-                            if isinstance(param, MediumLevelILVar):
-                                param = param.src
+                # Recurse to callee if not yet visited
+                if self._calls_function_that_frees(subfn.name, visited):
+                    for param in loc.params:
+                        if isinstance(param, MediumLevelILVar):
+                            param = param.src
 
-                            if param in self.combined_tainted_vars_path:
+                        if param in self.combined_tainted_vars_path:
+                            if subfn.name not in self.dealloc_functions:
                                 self.dealloc_functions.append(subfn.name)
-                                #:DEBUG
-                                # print(f"Found a call to {subfn.name} that frees a buffer")
-                                return True
+                            return True
 
         return False
 
@@ -262,6 +322,12 @@ class UseAfterFreeDetection:
         dealloc_addr = dealloc_loc.addr
         dealloc_func = dealloc_loc.function_node.name
 
+        print(
+            f"[UAF _detect_uaf] Looking for uses after free at {hex(dealloc_addr)} in function {dealloc_func}"
+        )
+        print(f"[UAF _detect_uaf] Tainted variable names: {tainted_names}")
+
+        found_post_free_uses = 0
         for (_, _), (cross_path_data, _) in self.slice_data.items():
             for t_loc in cross_path_data:
                 if (
@@ -272,8 +338,13 @@ class UseAfterFreeDetection:
                     written_names = {v.name for v in t_loc.loc.vars_written}
 
                     if tainted_names & (read_names | written_names):
+                        found_post_free_uses += 1
+                        print(
+                            f"[UAF _detect_uaf] Found post-free use #{found_post_free_uses} at {hex(t_loc.addr)}: {t_loc.loc}"
+                        )
                         vulnerable_path.append(t_loc)
 
+        print(f"[UAF _detect_uaf] Total post-free uses found: {found_post_free_uses}")
         return vulnerable_path
 
     def _is_buffer_reallocated_after_free(
@@ -449,7 +520,9 @@ class UseAfterFreeDetection:
 
         return rets_after_free
 
-    def _get_last_buffer_allocated(self, path_data, tainted_vars) -> TaintedLOC | None:
+    def _get_last_buffer_allocated(
+        self, path_data, tainted_vars
+    ) -> Optional[TaintedLOC]:
         """
         Identifies the most recent allocation site in the taint path.
 
