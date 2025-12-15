@@ -368,6 +368,9 @@ class TaintedVarOffset:
             This describes the taint of the memory access, not necessarily the offset_var itself.
         loc_address (int):
             Address of the MLIL instruction that produced this reference.
+        size (int | None):
+            Optional size in bytes of the tainted region. Used to filter struct member accesses
+            that fall outside the tainted range.
     """
 
     def __init__(
@@ -379,6 +382,7 @@ class TaintedVarOffset:
         ],
         confidence_level: TaintConfidence,
         loc_address: int,
+        size: int = None,
     ):
         self.variable = variable
         self.offset = offset
@@ -386,6 +390,7 @@ class TaintedVarOffset:
         self.loc_address = loc_address
         self.offset_var = offset_var
         self.name = str(variable)
+        self.size = size
 
     def __eq__(self, other):
         if not isinstance(other, TaintedVarOffset):
@@ -396,6 +401,7 @@ class TaintedVarOffset:
             and self.confidence_level == other.confidence_level
             and self.loc_address == other.loc_address
             and self.offset_var == other.offset_var
+            and self.size == other.size
         )
 
     def __hash__(self):
