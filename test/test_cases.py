@@ -23,6 +23,7 @@ from pprint import pprint
 from bingoggles.bg import Analysis
 from bingoggles.bingoggles_types import *
 from bingoggles.modules import *
+from colorama import Fore
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -66,7 +67,7 @@ def pytest_addoption(parser):
 
 
 @lru_cache(maxsize=None)
-def find_dir(root_path: str, target_name: str) -> str | None:
+def find_dir(root_path: str, target_name: str) -> Optional[str]:
     """
     Recursively search for a directory named `target_name` under `root_path`,
     and cache the result for future calls.
@@ -402,17 +403,16 @@ def test_is_param_tainted(bg_init):
 def test_global_tracking_fwd_var(bg_init):
     """
     Ensure global tracking reaches the printf sink and marks glob_buf as tainted.
-
     Expected path (by MLIL instr_index, not hard-coded addresses):
 
-      4:  _IO_fgets(rdi, 0x100, rdx)
-      5:  rdi_1 = &var_118
-      6:  rax_1 = scramble_data(rdi_1)
-      7:  var_120 = rax_1
-      8:  rax_2 = var_120
-      9:  rsi = rax_2
-      10: sub_401020(0x4abb20, rsi)
-      12: _IO_printf(0x4abb20)
+    4:  _IO_fgets(rdi, 0x100, rdx)
+    5:  rdi_1 = &var_118
+    6:  rax_1 = scramble_data(rdi_1)
+    7:  var_120 = rax_1
+    8:  rax_2 = var_120
+    9:  rsi = rax_2
+    10: sub_401020(0x4abb20, rsi)
+    12: _IO_printf(0x4abb20)
     """
     test_bin = get_bndb_path_or_original(
         f"{bingoggles_path}/binaries/bin/test_global_tracking.bndb"
@@ -429,6 +429,7 @@ def test_global_tracking_fwd_var(bg_init):
         target=TaintTarget(0x004019EC, "rdi"),
         var_type=SlicingID.FunctionVar,
     )
+    print(tainted_vars)
 
     assert locs, "No tainted LOCs found for global variable"
 
@@ -453,7 +454,9 @@ def test_global_tracking_fwd_var(bg_init):
 
 
 def test_uaf(bg_init):
-    test_bin = get_bndb_path_or_original(f"{bingoggles_path}/binaries/bin/test_uaf")
+    test_bin = get_bndb_path_or_original(
+        f"{bingoggles_path}/binaries/bin/test_uaf.bndb"
+    )
     bg = bg_init(
         target_bin=abspath(test_bin),
         libraries=[],
@@ -461,18 +464,27 @@ def test_uaf(bg_init):
     bv, libraries_mapped = bg.init()
 
     aux = Analysis(binaryview=bv, verbose=False, libraries_mapped=libraries_mapped)
-    test_case = input("Which UAF test case would you like to run? (1-8): ")
 
-    match test_case:
-        case "1":
+    # Run all cases sequentially without interactive input
+    for test_case in [str(i) for i in range(1, 9)]:
+        print(f"\n[UAF TEST] Running case {test_case}")
+        if test_case == "1":
             # Testing a basic Use-After-Free (UAF) where memory is allocated, freed, and then accessed.
-            # (VULNERABLE):     0 @ 08049240  eax = malloc(0x64)   [PASS]
+            # (VULNERABLE):   0 @ 00401aa6  rax = __libc_malloc   [PASS]
             data = aux.complete_slice(
-                target=TaintTarget(0x08049240, "eax"),
+                target=TaintTarget(0x00401AA6, "rax"),
                 var_type=SlicingID.FunctionVar,
                 slice_type=SliceType.Forward,
             )
 
+            print(
+                f"[TEST DEBUG] complete_slice returned {len(data) if data else 0} entries"
+            )
+            if data:
+                for key, (path_data, tainted_vars) in data.items():
+                    print(
+                        f"[TEST DEBUG] {key}: {len(path_data)} path entries, {len(tainted_vars)} tainted vars"
+                    )
             scanners = UseAfterFreeDetection(bv, data)
             vulns = scanners.analyzer()
             vuln_reports = [i for i in vulns]
@@ -480,17 +492,17 @@ def test_uaf(bg_init):
             assert len(vuln_reports) > 0, "No UAF detected"
             assert len(vuln_reports) == 1, "Multiple UAF detected"
             assert (
-                len(vuln_reports[0].vulnerable_path_data) == 4
-            ), "Expected 4 elements in the report"
+                len(vuln_reports[0].vulnerable_path_data) == 6
+            ), f"Expected 6 elements in the report, got {len(vuln_reports[0].vulnerable_path_data)}"
 
             print(f"[{Fore.GREEN}UAF Detected{Fore.RESET}]:")
             pprint([loc for loc in vuln_reports[0].vulnerable_path_data])
 
-        case "2":
+        elif test_case == "2":
             # Testing a UAF using realloc with size 0 (effectively freeing the memory), then accessing the freed memory.
-            # (VULNERABLE):     0 @ 080492dd  eax = malloc(0x64)   [PASS]
+            # (VULNERABLE):   0 @ 00401b54  rax = __libc_malloc(0x64)   [PASS]
             data = aux.complete_slice(
-                target=TaintTarget(0x080492DD, "eax"),
+                target=TaintTarget(0x00401B54, "rax"),
                 var_type=SlicingID.FunctionVar,
                 slice_type=SliceType.Forward,
             )
@@ -502,31 +514,52 @@ def test_uaf(bg_init):
             assert len(vuln_reports) > 0, "No UAF detected"
             assert len(vuln_reports) == 1, "Multiple UAF detected"
             assert (
-                len(vuln_reports[0].vulnerable_path_data) == 5
-            ), "Expected 5 elements in the report"
+                len(vuln_reports[0].vulnerable_path_data) == 7
+            ), "Expected 7 elements in the report"
 
             print(f"[{Fore.GREEN}UAF Detected{Fore.RESET}]:")
             pprint([loc for loc in vuln_reports[0].vulnerable_path_data])
 
-        case "3":
+        elif test_case == "3":
             # No vulnerability, testing for safe usage of allocated memory without freeing it prematurely.
-            # (SAFE):    0 @ 0804937f  eax = malloc(0x64)   [PASS]
+            # (SAFE):      0 @ 00401c13  rax = __libc_malloc(0x64)  [PASS]
             data = aux.complete_slice(
-                target=TaintTarget(0x0804937F, "eax"),
+                target=TaintTarget(0x00401C13, "rax"),
                 var_type=SlicingID.FunctionVar,
                 slice_type=SliceType.Forward,
             )
             scanners = UseAfterFreeDetection(bv, data)
             vulns = scanners.analyzer()
-            assert vulns is None, "Expected None"
+            assert len(vulns) == 0, f"Expected empty report got {vulns}"
 
-            print(f"[{Fore.GREEN}SAFE{Fore.GREEN}]: No UAF detected.")
+            print(f"[{Fore.GREEN}SAFE{Fore.RESET}]: No UAF detected.")
 
-        case "4":
+        elif test_case == "4":
             # Testing UAF where memory is freed and then accessed across function boundaries.
-            # (VULNERABLE):   0 @ 0804947b  eax = malloc(0x64) [PASS]
+            # (VULNERABLE):    0 @ 00401d31  rax = __libc_malloc(0x64) [PASS]
             data = aux.complete_slice(
-                target=TaintTarget(0x0804947B, "eax"),
+                target=TaintTarget(0x00401D31, "rax"),
+                var_type=SlicingID.FunctionVar,
+                slice_type=SliceType.Forward,
+            )
+            scanners = UseAfterFreeDetection(bv, data)
+            vulns = scanners.analyzer()
+            vuln_reports = [i for i in vulns]
+
+            assert len(vuln_reports) > 0, "No UAF detected"
+            assert len(vuln_reports) == 1, "Multiple UAF detected"
+            assert (
+                len(vuln_reports[0].vulnerable_path_data) == 8
+            ), "Expected 8 elements in the report"
+
+            print(f"[{Fore.GREEN}UAF Detected{Fore.RESET}]:")
+            pprint([loc for loc in vuln_reports[0].vulnerable_path_data])
+
+        elif test_case == "5":
+            # Demonstrating UAF where a buffer is freed in one function and then accessed in another function.
+            # (VULNERABLE):    0 @ 00401e38  buffer = __libc_malloc(0x64) [PASS]
+            data = aux.complete_slice(
+                target=TaintTarget(0x00401E38, "buffer"),
                 var_type=SlicingID.FunctionVar,
                 slice_type=SliceType.Forward,
             )
@@ -543,32 +576,11 @@ def test_uaf(bg_init):
             print(f"[{Fore.GREEN}UAF Detected{Fore.RESET}]:")
             pprint([loc for loc in vuln_reports[0].vulnerable_path_data])
 
-        case "5":
-            # Demonstrating UAF where a buffer is freed in one function and then accessed in another function.
-            # (VULNERABLE):   0 @ 0804955b  buffer = malloc(0x64) [PASS]
-            data = aux.complete_slice(
-                target=TaintTarget(0x0804955B, "buffer"),
-                var_type=SlicingID.FunctionVar,
-                slice_type=SliceType.Forward,
-            )
-            scanners = UseAfterFreeDetection(bv, data)
-            vulns = scanners.analyzer()
-            vuln_reports = [i for i in vulns]
-
-            assert len(vuln_reports) > 0, "No UAF detected"
-            assert len(vuln_reports) == 1, "Multiple UAF detected"
-            assert (
-                len(vuln_reports[0].vulnerable_path_data) == 4
-            ), "Expected 4 elements in the report"
-
-            print(f"[{Fore.GREEN}UAF Detected{Fore.RESET}]:")
-            pprint([loc for loc in vuln_reports[0].vulnerable_path_data])
-
-        case "6":
+        elif test_case == "6":
             # UAF where memory is reallocated but used after being freed by realloc.
-            # (VULNERABLE):   0 @ 0804960e  eax = malloc(0x64) [PASS]
+            # (VULNERABLE):   3 @ 00401f18  rax_2 = __libc_malloc(0x64)[PASS]
             data = aux.complete_slice(
-                target=TaintTarget(0x0804960E, "eax"),
+                target=TaintTarget(0x00401F18, "rax_2"),
                 var_type=SlicingID.FunctionVar,
                 slice_type=SliceType.Forward,
             )
@@ -579,32 +591,32 @@ def test_uaf(bg_init):
             assert len(vuln_reports) > 0, "No UAF detected"
             assert len(vuln_reports) == 1, "Multiple UAF detected"
             assert (
-                len(vuln_reports[0].vulnerable_path_data) == 9
-            ), "Expected 9 elements in the report"
+                len(vuln_reports[0].vulnerable_path_data) == 13
+            ), "Expected 13 elements in the report"
 
             print(f"[{Fore.GREEN}UAF Detected{Fore.RESET}]:")
             pprint([loc for loc in vuln_reports[0].vulnerable_path_data])
 
-        case "7":
+        elif test_case == "7":
             # Safe usage of memory where allocated memory is correctly freed and reallocated.
-            # (SAFE):   0 @ 08049716  eax = malloc(0x64)  [PASS]
+            # (SAFE):   0 @ 0040205d  rax = __libc_malloc(0x64)[PASS]
             data = aux.complete_slice(
-                target=TaintTarget(0x08049716, "eax"),
+                target=TaintTarget(0x0040205D, "rax"),
                 var_type=SlicingID.FunctionVar,
                 slice_type=SliceType.Forward,
             )
             scanners = UseAfterFreeDetection(bv, data)
             vulns = scanners.analyzer()
 
-            assert vulns is None, f"Expected None, but got {type(vulns).__name__}"
+            assert len(vulns) == 0, f"Expected empty list, got {vulns}"
 
             print(f"[{Fore.GREEN}SAFE{Fore.RESET}]: No UAF detected.")
 
-        case "8":
+        elif test_case == "8":
             # Deep sub-function frees buffer and then reuses the memory in the parent function
-            # (VULNERBLE):   0 @ 080498c6  buffer = malloc(0x64) [PASS]
+            # (VULNERBLE)   0 @ 00402239  buffer = __libc_malloc(0x64)[PASS]
             data = aux.complete_slice(
-                target=TaintTarget(0x080498C6, "buffer"),
+                target=TaintTarget(0x00402239, "buffer"),
                 var_type=SlicingID.FunctionVar,
                 slice_type=SliceType.Forward,
             )
@@ -612,8 +624,8 @@ def test_uaf(bg_init):
             vulns = scanners.analyzer()
             assert vulns
             assert (
-                len(vulns[0].vulnerable_path_data) == 4
-            ), "Expected 4 elements in the report"
+                len(vulns[0].vulnerable_path_data) == 6
+            ), "Expected 6 elements in the report"
 
             print(f"[{Fore.GREEN}UAF Detected{Fore.RESET}]:")
             pprint([loc for loc in vulns[0].vulnerable_path_data])
@@ -621,7 +633,7 @@ def test_uaf(bg_init):
 
 def test_load_struct(bg_init):
     test_bin = get_bndb_path_or_original(
-        f"{bingoggles_path}/binaries/bin/test_struct_member"
+        f"{bingoggles_path}/binaries/bin/test_struct_member.bndb"
     )
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -631,19 +643,28 @@ def test_load_struct(bg_init):
 
     aux = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
     locs, _, tainted_vars = aux.tainted_slice(
-        target=TaintTarget(0x0804922D, "ptr"),
+        #    5 @ 00401a6f  rax_1 = myStruct.ptr
+        target=TaintTarget(0x00401A6F, "ptr"),
         var_type=SlicingID.StructMember,
     )
-    expected_instrs = [3, 5, 6, 8, 9, 11, 12, 14, 38, 39, 40, 50, 51, 52]
-    for i in locs:
-        assert i.loc.instr_index == expected_instrs.pop(0)
 
+    # Forward slice from myStruct.ptr should include:
+    # - Loading ptr field and dereferencing it (5-9)
+    # - Other field accesses from the same struct variable (10-24)
+    # The struct member taint propagates through the myStruct variable
+    expected_instrs = [5, 6, 7, 9, 10, 11, 13, 14, 15, 16, 18, 19, 20, 22, 23, 24]
+    assert len(locs) == len(expected_instrs), f"expected {len(expected_instrs)} instructions, got {len(locs)}"
+    
+    actual_indices = [loc.loc.instr_index for loc in locs]
+    assert actual_indices == expected_instrs, f"Expected indices {expected_instrs}, got {actual_indices}"
+    
+    pprint(locs)
     pprint(tainted_vars)
 
 
 def test_set_var_field(bg_init):
     test_bin = get_bndb_path_or_original(
-        f"{bingoggles_path}/binaries/bin/test_struct_member"
+        f"{bingoggles_path}/binaries/bin/test_struct_member.bndb"
     )
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -654,19 +675,24 @@ def test_set_var_field(bg_init):
     aux = Analysis(binaryview=bv, verbose=True, libraries_mapped=libraries_mapped)
 
     locs, _, tainted_vars = aux.tainted_slice(
-        #    5 @ 0x080493a8  eax = myStruct.ptr
-        target=TaintTarget(0x080493A8, "ptr"),
+        #   2 @ 00401a0b  rax_1 = rax->ptr (LOAD_STRUCT)
+        target=TaintTarget(0x00401a0b, "ptr"),
         var_type=SlicingID.StructMember,
     )
 
     pprint(tainted_vars)
     instr_indexes = set([loc.loc.instr_index for loc in locs])
-    expected_indexes = [5, 6, 7, 8]
+    # Forward slice from rax->ptr should include:
+    # 2: rax_1 = rax->ptr (loading the ptr field)
+    # 3: rdi = rax_1 (passing to free)
+    # 4: free(rdi) (freeing the pointer)
+    expected_indexes = [2, 3, 4]
 
     missing = set(expected_indexes) - instr_indexes
     assert not missing, f"Missing expected instruction indexes: {sorted(missing)}"
-    for i in locs:
-        assert expected_indexes.pop(0) == i.loc.instr_index
+    
+    actual_indices = sorted(instr_indexes)
+    assert actual_indices == expected_indexes, f"Expected {expected_indexes}, got {actual_indices}"
 
 
 def test_interproc_memcpy(bg_init):
@@ -689,13 +715,14 @@ def test_interproc_memcpy(bg_init):
 
     pprint(tainted_vars)
 
+
 def test_struct_member_taint_flow(bg_init):
     """
     Validate that data read into 's' via fgets flows through copy_inner calls
     and into sink_printf_buf.
     """
     test_bin = get_bndb_path_or_original(
-        f"{bingoggles_path}/binaries/bin/test_struct_member_taint"
+        f"{bingoggles_path}/binaries/bin/test_struct_member_taint.bndb"
     )
     bg = bg_init(
         target_bin=abspath(test_bin),
@@ -713,7 +740,7 @@ def test_struct_member_taint_flow(bg_init):
     assert locs, "No tainted locations found from fgets(s, ...)"
 
     instr_indexes = {loc.loc.instr_index for loc in locs}
-    expected = {7, 10, 12, 13, 15, 19, 21, 25, 26}
+    expected = {7, 8, 10, 12, 13, 15, 19, 21, 25, 26}
     missing = expected - instr_indexes
     unexpected = instr_indexes - expected
 
@@ -723,6 +750,6 @@ def test_struct_member_taint_flow(bg_init):
     # Sanity-check tainted vars
     var_names = {str(tv.variable) for tv in tainted_vars}
     for name in ("s", "rsi_1", "rsi_2", "rsi_4", "rdi_6"):
-        assert any(name == v or name in v for v in var_names), (
-            f"Expected '{name}' to be tainted; got {sorted(var_names)}"
-        )
+        assert any(
+            name == v or name in v for v in var_names
+        ), f"Expected '{name}' to be tainted; got {sorted(var_names)}"
