@@ -184,6 +184,21 @@
             "justMyCode": false
         },
         {
+            "name": "test",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "test/test_cases.py::test",
+                "-v",
+                "-s"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+
+        {
             "name": "Run All Tests",
             "type": "debugpy",
             "request": "launch",

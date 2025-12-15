@@ -1,6 +1,7 @@
 from bingoggles import *
 import binaryninja
 
+
 def get_all_files(directory):
     """
     Recursively gets the full path for every file in a given directory
