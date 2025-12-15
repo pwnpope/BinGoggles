@@ -16,15 +16,26 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _strip_ansi(s: str) -> str:
+    """Remove ANSI color codes from a string."""
     return _ANSI_RE.sub("", s)
 
 
 def _visible_len(s: str) -> int:
+    """Calculate the visible length of a string, excluding ANSI codes."""
     return len(_strip_ansi(s))
 
 
 def _truncate_visible(s: str, width: int) -> str:
-    """Truncate a possibly ANSI-colored string to a visible width, preserving ANSI codes."""
+    """
+    Truncate a possibly ANSI-colored string to a visible width, preserving ANSI codes.
+    
+    Args:
+        s (str): The string to truncate (may contain ANSI escape sequences).
+        width (int): The maximum visible width (excluding ANSI codes).
+    
+    Returns:
+        str: Truncated string with ellipsis if needed, preserving color codes.
+    """
     if width <= 0:
         return ""
     if _visible_len(s) <= width:
@@ -49,6 +60,16 @@ def _truncate_visible(s: str, width: int) -> str:
 
 
 def _pad_right_visible(s: str, width: int) -> str:
+    """
+    Pad a string with spaces to reach a specific visible width.
+    
+    Args:
+        s (str): The string to pad (may contain ANSI escape sequences).
+        width (int): The target visible width.
+    
+    Returns:
+        str: The string padded with spaces to reach the target width.
+    """
     pad = max(0, width - _visible_len(s))
     return s + (" " * pad)
 
@@ -71,14 +92,31 @@ def set_output_options(use_color: bool = True, log_file: Optional[str] = None):
 
 
 def colorize(text: str, color: str) -> str:
-    """Apply color to text if coloring is enabled"""
+    """
+    Apply color to text if coloring is enabled.
+    
+    Args:
+        text (str): The text to colorize.
+        color (str): The color code (from colorama.Fore).
+    
+    Returns:
+        str: Colorized text if USE_COLOR is True, otherwise plain text.
+    """
     if USE_COLOR:
         return f"{color}{text}{Fore.RESET}"
     return text
 
 
 def log_output(text: str):
-    """Write output to log file if logging is enabled"""
+    """
+    Write output to log file if logging is enabled.
+    
+    Args:
+        text (str): The text to log (ANSI color codes will be stripped).
+    
+    Returns:
+        None
+    """
     if LOG_FILE:
         # Strip ANSI color codes for log file
         clean_text = re.sub(r"\x1b\[[0-9;]*m", "", text)
