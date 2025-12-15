@@ -58,6 +58,23 @@ class InterprocHelper:
         var_mapping: dict,
         provenance: Optional[Dict[Variable, set]] = None,
     ) -> bool:
+        """
+        Determine if a variable is tainted based on parameter mapping and provenance.
+
+        This method checks whether a given variable traces back to any of the original
+        tainted parameters through the variable mapping, optionally considering
+        transitive dependencies via provenance information.
+
+        Args:
+            original_tainted_params (tuple): The set of parameters originally marked as tainted.
+            variable (Union[Variable, SSAVariable]): The variable to check for taint.
+            var_mapping (dict): Mapping from caller variables to callee parameters (or vice versa).
+            provenance (Optional[Dict[Variable, set]]): Optional dependency graph showing which
+                variables influence others.
+
+        Returns:
+            bool: True if the variable traces back to a tainted parameter, False otherwise.
+        """
         def norm(v):
             if v is None:
                 return None
@@ -424,16 +441,14 @@ class InterprocHelper:
 
             case MediumLevelILOperation.MLIL_SET_VAR_SSA.value:
                 #:TODO having this check will have us missing taint data for whatever reason so i gotta look into that
-                if reads_any_tainted_var(loc, tainted_variables):
-                    # TODO: This currently taints all vars_written when any source is tainted.
-                    #       If we later see instructions where only some written variables
-                    #       actually depend on the tainted inputs, we should special‑case those
-                    #       patterns and inspect operands so that only the truly
-                    #       data‑dependent written vars are tainted.
-                    for var in loc.vars_written:
-                        append_bingoggles_var_by_type(
-                            var, tainted_variables, loc, analysis
-                        )
+                # if reads_any_tainted_var(loc, tainted_variables):
+                # TODO: This currently taints all vars_written when any source is tainted.
+                #       If we later see instructions where only some written variables
+                #       actually depend on the tainted inputs, we should special‑case those
+                #       patterns and inspect operands so that only the truly
+                #       data‑dependent written vars are tainted.
+                for var in loc.vars_written:
+                    append_bingoggles_var_by_type(var, tainted_variables, loc, analysis)
 
             case MediumLevelILOperation.MLIL_CALL_SSA.value:
                 self.handle_mlil_call_ssa(
@@ -452,10 +467,10 @@ class InterprocHelper:
                 #     for read_var in loc.vars_read
                 #     if tv is not None
                 # ):
-                if reads_any_tainted_var(loc, tainted_variables):
-                    tainted_variables.add(
-                        TaintedVar(loc.dest, TaintConfidence.Tainted, loc.address)
-                    )
+                # if reads_any_tainted_var(loc, tainted_variables):
+                tainted_variables.add(
+                    TaintedVar(loc.dest, TaintConfidence.Tainted, loc.address)
+                )
 
             case _:
                 if loc.operation in [
@@ -838,7 +853,7 @@ class Analysis:
         propagated_vars: List[
             Union[TaintedGlobal, TaintedStructMember, TaintedVarOffset, TaintedVar]
         ],
-    ) -> dict | None:
+    ) -> Optional[dict]:
         """
         Identify and extract function calls within a tainted slice, along with their metadata.
 
@@ -1042,14 +1057,29 @@ class Analysis:
             MediumLevelILOperation.MLIL_VAR_FIELD.value,
             MediumLevelILOperation.MLIL_SET_VAR_SSA_FIELD.value,
         }
-        if op not in struct_ops:
+        
+        # Check if the instruction itself or any of its operands are struct operations
+        is_struct_op = op.value in struct_ops
+        
+        # Check src if it exists and has an operation
+        if not is_struct_op and hasattr(instr_mlil, 'src'):
+            src = instr_mlil.src
+            if hasattr(src, 'operation'):
+                is_struct_op = src.operation.value in struct_ops
+        
+        # Check dest if it exists and has an operation
+        if not is_struct_op and hasattr(instr_mlil, 'dest'):
+            dest = instr_mlil.dest
+            if hasattr(dest, 'operation'):
+                is_struct_op = dest.operation.value in struct_ops
+        
+        if not is_struct_op:
             raise ValueError(
                 f"init_struct_member_trace: unsupported entry op {op} at "
                 f"{hex(instr_mlil.address)}; expected one of {sorted(struct_ops)}"
             )
 
         instr_hlil = func_obj.get_llil_at(target.loc_address).hlil
-
 
         try:
             struct_offset = instr_mlil.ssa_form.src.offset
@@ -1101,11 +1131,20 @@ class Analysis:
             source = instr_mlil.src
             base_var = instr_mlil.src.src
             if source.operation.value == MediumLevelILOperation.MLIL_LOAD_STRUCT.value:
+                # Get the HLIL base variable for more accurate struct tracking
+                hlil_base_var = base_var
+                if instr_hlil.operation.value in [
+                    HighLevelILOperation.HLIL_DEREF_FIELD.value,
+                    HighLevelILOperation.HLIL_STRUCT_FIELD.value,
+                ]:
+                    if hasattr(instr_hlil, 'src') and hasattr(instr_hlil.src, 'var'):
+                        hlil_base_var = instr_hlil.src.var
+                
                 tainted_struct_member = TaintedStructMember(
                     target.loc_address,
                     target.variable,
                     struct_offset,
-                    base_var,
+                    hlil_base_var,
                     instr_mlil.src.src.var,
                     TaintConfidence.Tainted,
                 )
@@ -1134,12 +1173,14 @@ class Analysis:
                     )
 
             elif source.operation.value == MediumLevelILOperation.MLIL_VAR_FIELD:
+                # For VAR_FIELD, both hlil_var and variable should be the base struct variable
+                # base_var is already set to instr_mlil.src.src (the myStruct variable)
                 tainted_struct_member = TaintedStructMember(
                     target.loc_address,
                     target.variable,
                     struct_offset,
                     base_var,
-                    instr_mlil.dest,
+                    base_var,  # MLIL base variable, not the destination
                     TaintConfidence.Tainted,
                 )
 
@@ -1208,8 +1249,13 @@ class Analysis:
             i.address
             for i in param_refs
             if func_obj.get_llil_at(i.address).mlil is not None
-        ][0]
+        ]
 
+        if len(first_ref_addr) == 0:
+            # No MLIL references found for this parameter
+            return [], []
+
+        first_ref_addr = first_ref_addr[0]
         first_ref_mlil = func_obj.get_llil_at(first_ref_addr).mlil
         return trace_tainted_variable(
             self, func_obj, first_ref_mlil, target_param, SliceType.Forward
@@ -1550,7 +1596,7 @@ class Analysis:
 
     def find_first_var_use(
         self, func: Function, var_or_name: Union[SSAVariable, Variable, str]
-    ) -> Union[int, None]:
+    ) -> Optional[int]:
         """
         Return the first MLIL instruction where the given variable is used.
 
@@ -1808,7 +1854,7 @@ class Analysis:
     @cache
     def resolve_function_type(
         self, instr_mlil: MediumLevelILInstruction
-    ) -> tuple[str, str | Symbol | None]:
+    ) -> str | bool | None:
         """
         Determine whether the MLIL call targets an imported function, a builtin, or neither.
 
@@ -1816,10 +1862,10 @@ class Analysis:
             instr_mlil (MediumLevelILInstruction): The MLIL call instruction to analyze.
 
         Returns:
-            tuple[str, str | Symbol | None]:
-                - A tuple (type, identifier), where:
-                    - type: 'import', 'builtin', or 'none'
-                    - identifier: Symbol (for imports), or function name (for builtins), or None
+            str | bool | None:
+                - str: Name of the imported function (e.g., "printf")
+                - True: The call targets a builtin (in .synthetic_builtins)
+                - None: The call is neither imported nor builtin
         """
         call_target = instr_mlil.dest
 
@@ -1866,9 +1912,6 @@ class Analysis:
         Returns:
             Union[InterprocTaintResult, None]: The result of the taint analysis if the function is found and analyzed,
             otherwise None.
-
-        Notes:
-            Currently this functionality for imported function analysis needs to be revised, if another function is imported in the library that's being analyzed
         """
 
         # functions that are already modeled (e.g: common libc functions and binja instrinsic functions)
@@ -1878,10 +1921,9 @@ class Analysis:
             function_model: FunctionModel = modeled_functions[
                 get_modeled_function_index(func_symbol)
             ]
-            if (
-                function_model.taints_return or function_model.taint_destinations
-            ) and tainted_param_in_model_sources(function_model, loc, tainted_param):
-                return function_model
+
+            # If a function model exists, use it to avoid analyzing the function's internals
+            return function_model
 
         # Analyze imported function
         if hasattr(func_symbol, "name"):
