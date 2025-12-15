@@ -653,11 +653,15 @@ def test_load_struct(bg_init):
     # - Other field accesses from the same struct variable (10-24)
     # The struct member taint propagates through the myStruct variable
     expected_instrs = [5, 6, 7, 9, 10, 11, 13, 14, 15, 16, 18, 19, 20, 22, 23, 24]
-    assert len(locs) == len(expected_instrs), f"expected {len(expected_instrs)} instructions, got {len(locs)}"
-    
+    assert len(locs) == len(
+        expected_instrs
+    ), f"expected {len(expected_instrs)} instructions, got {len(locs)}"
+
     actual_indices = [loc.loc.instr_index for loc in locs]
-    assert actual_indices == expected_instrs, f"Expected indices {expected_instrs}, got {actual_indices}"
-    
+    assert (
+        actual_indices == expected_instrs
+    ), f"Expected indices {expected_instrs}, got {actual_indices}"
+
     pprint(locs)
     pprint(tainted_vars)
 
@@ -676,7 +680,7 @@ def test_set_var_field(bg_init):
 
     locs, _, tainted_vars = aux.tainted_slice(
         #   2 @ 00401a0b  rax_1 = rax->ptr (LOAD_STRUCT)
-        target=TaintTarget(0x00401a0b, "ptr"),
+        target=TaintTarget(0x00401A0B, "ptr"),
         var_type=SlicingID.StructMember,
     )
 
@@ -690,9 +694,11 @@ def test_set_var_field(bg_init):
 
     missing = set(expected_indexes) - instr_indexes
     assert not missing, f"Missing expected instruction indexes: {sorted(missing)}"
-    
+
     actual_indices = sorted(instr_indexes)
-    assert actual_indices == expected_indexes, f"Expected {expected_indexes}, got {actual_indices}"
+    assert (
+        actual_indices == expected_indexes
+    ), f"Expected {expected_indexes}, got {actual_indices}"
 
 
 def test_interproc_memcpy(bg_init):

@@ -28,11 +28,11 @@ def _visible_len(s: str) -> int:
 def _truncate_visible(s: str, width: int) -> str:
     """
     Truncate a possibly ANSI-colored string to a visible width, preserving ANSI codes.
-    
+
     Args:
         s (str): The string to truncate (may contain ANSI escape sequences).
         width (int): The maximum visible width (excluding ANSI codes).
-    
+
     Returns:
         str: Truncated string with ellipsis if needed, preserving color codes.
     """
@@ -62,11 +62,11 @@ def _truncate_visible(s: str, width: int) -> str:
 def _pad_right_visible(s: str, width: int) -> str:
     """
     Pad a string with spaces to reach a specific visible width.
-    
+
     Args:
         s (str): The string to pad (may contain ANSI escape sequences).
         width (int): The target visible width.
-    
+
     Returns:
         str: The string padded with spaces to reach the target width.
     """
@@ -94,11 +94,11 @@ def set_output_options(use_color: bool = True, log_file: Optional[str] = None):
 def colorize(text: str, color: str) -> str:
     """
     Apply color to text if coloring is enabled.
-    
+
     Args:
         text (str): The text to colorize.
         color (str): The color code (from colorama.Fore).
-    
+
     Returns:
         str: Colorized text if USE_COLOR is True, otherwise plain text.
     """
@@ -110,10 +110,10 @@ def colorize(text: str, color: str) -> str:
 def log_output(text: str):
     """
     Write output to log file if logging is enabled.
-    
+
     Args:
         text (str): The text to log (ANSI color codes will be stripped).
-    
+
     Returns:
         None
     """

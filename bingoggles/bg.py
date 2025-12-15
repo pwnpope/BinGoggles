@@ -75,6 +75,7 @@ class InterprocHelper:
         Returns:
             bool: True if the variable traces back to a tainted parameter, False otherwise.
         """
+
         def norm(v):
             if v is None:
                 return None
@@ -1057,22 +1058,22 @@ class Analysis:
             MediumLevelILOperation.MLIL_VAR_FIELD.value,
             MediumLevelILOperation.MLIL_SET_VAR_SSA_FIELD.value,
         }
-        
+
         # Check if the instruction itself or any of its operands are struct operations
         is_struct_op = op.value in struct_ops
-        
+
         # Check src if it exists and has an operation
-        if not is_struct_op and hasattr(instr_mlil, 'src'):
+        if not is_struct_op and hasattr(instr_mlil, "src"):
             src = instr_mlil.src
-            if hasattr(src, 'operation'):
+            if hasattr(src, "operation"):
                 is_struct_op = src.operation.value in struct_ops
-        
+
         # Check dest if it exists and has an operation
-        if not is_struct_op and hasattr(instr_mlil, 'dest'):
+        if not is_struct_op and hasattr(instr_mlil, "dest"):
             dest = instr_mlil.dest
-            if hasattr(dest, 'operation'):
+            if hasattr(dest, "operation"):
                 is_struct_op = dest.operation.value in struct_ops
-        
+
         if not is_struct_op:
             raise ValueError(
                 f"init_struct_member_trace: unsupported entry op {op} at "
@@ -1137,9 +1138,9 @@ class Analysis:
                     HighLevelILOperation.HLIL_DEREF_FIELD.value,
                     HighLevelILOperation.HLIL_STRUCT_FIELD.value,
                 ]:
-                    if hasattr(instr_hlil, 'src') and hasattr(instr_hlil.src, 'var'):
+                    if hasattr(instr_hlil, "src") and hasattr(instr_hlil.src, "var"):
                         hlil_base_var = instr_hlil.src.var
-                
+
                 tainted_struct_member = TaintedStructMember(
                     target.loc_address,
                     target.variable,

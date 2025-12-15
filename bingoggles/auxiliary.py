@@ -256,7 +256,9 @@ def get_struct_field_refs(
                     == MediumLevelILOperation.MLIL_LOAD_STRUCT.value
                 ):
                     if (
-                        base_matches(getattr(getattr(instr_mlil.src, "src", None), "var", None))
+                        base_matches(
+                            getattr(getattr(instr_mlil.src, "src", None), "var", None)
+                        )
                         and instr_mlil.src.offset == tainted_struct_member.offset
                     ):
                         mlil_use_sites.add(instr_mlil)
@@ -868,7 +870,7 @@ def get_connected_var(
                 src_var = store_struct_source_var(mlil)
                 if src_var is not None:
                     connected_candidates.append((mlil.address, src_var))
-            
+
             # For LOAD_STRUCT/SET_VAR operations, don't propagate the base struct pointer
             # as a connected var - we want to track the field value, not the struct itself
             # elif hasattr(mlil, "vars_read") and mlil.vars_read:
@@ -2716,10 +2718,10 @@ def propagate_mlil_set_var(
         skip_read_var = (
             trace_type == SliceType.Forward
             and mlil_loc.operation == MediumLevelILOperation.MLIL_SET_VAR.value
-            and hasattr(mlil_loc, 'src')
+            and hasattr(mlil_loc, "src")
             and mlil_loc.src.operation == MediumLevelILOperation.MLIL_LOAD_STRUCT.value
         )
-        
+
         if variable_read_from and not skip_read_var:
             if add_read_var(mlil_loc):
                 append_bingoggles_var_by_type(
