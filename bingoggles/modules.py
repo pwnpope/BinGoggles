@@ -602,7 +602,3 @@ class UseAfterFreeDetection:
                 return True
 
         return False
-
-
-class BuildVFG:
-    pass
